@@ -5,6 +5,7 @@ import { api, apiFetch } from "@/lib/api";
 import type { Farm } from "@/lib/types";
 import { useAuth } from "../../../../AuthContext";
 import { useLanguage } from "../../../../LanguageContext";
+import EditLocationPanel from "../../../../components/map/EditLocationPanel";
 import DashboardShell from "../../../../components/DashboardShell";
 import { ArrowLeft, ArrowRight, Calendar, ChevronRight, Layers, Plus, Tractor } from "lucide-react";
 import Link from "next/link";
@@ -142,6 +143,17 @@ export default function FarmDashboardPage({ params }: { params: Promise<{ id: st
                 ))}
               </div>
             )}
+              {farm && (
+                <div className="farmer-op-form-card" style={{ marginTop: 24 }}>
+                  <EditLocationPanel
+                    key={farm._id}
+                    endpoint={`/farms/${farm._id}`}
+                    initial={farm.coordinates}
+                    token={token}
+                    lang={lang}
+                  />
+                </div>
+              )}
             </section>
 
             <aside className="farmer-op-aside">

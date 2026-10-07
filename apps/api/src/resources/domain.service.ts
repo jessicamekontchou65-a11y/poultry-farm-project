@@ -8,6 +8,7 @@ import { InjectConnection } from "@nestjs/mongoose";
 import { Connection, Types } from "mongoose";
 import { schemaNames } from "../database/schema-names";
 import { CampayService, CampayStatus } from "../payments/campay.service";
+import { parseCoordinates } from "../common/coordinates";
 import {
   applyMortality,
   calculateEggProduction,
@@ -220,7 +221,7 @@ export class DomainService {
     ]);
     for (const [key, value] of Object.entries(body)) {
       if (blocked.has(key)) continue;
-      (farm as any)[key] = value;
+      (farm as any)[key] = key === "coordinates" ? parseCoordinates(value) ?? undefined : value;
     }
     await farm.save();
     return { data: farm };
@@ -1083,6 +1084,88 @@ export class DomainService {
         batches,
         records: { feeding, mortality, vaccination, eggs, expenses, sales }
       }
+    };
+  }
+
+  /**
+   * Farms and shops to show on the map. Public callers get approved, active listings;
+   * admins can include every status. Listings without a saved position are placed at
+   * their city or region centre and flagged as approximate.
+   */
+  async mapLocations(options: { type?: string; region?: string; includeAll?: boolean }) {
+    const wantFarms = options.type !== "shop";
+    const wantShops = options.type !== "farm";
+    const filter: Record<string, unknown> = options.includeAll
+      ? { status: { $ne: "deleted" } }
+      : { verificationStatus: "approved", status: "active" };
+    if (options.region) filter.region = String(options.region);
+    const fields = "name farmType description location city region coordinates images phone verificationStatus status ownerId";
+
+    const [farms, shops] = await Promise.all([
+      wantFarms ? this.model(schemaNames.Farm).find(filter).select(fields).limit(2000).lean() : [],
+      wantShops ? this.model(schemaNames.Shop).find(filter).select(fields).limit(2000).lean() : []
+    ]);
+
+    const owners = options.includeAll
+      ? new Map(
+          (
+            await this.model(schemaNames.User)
+              .find({ _id: { $in: [...farms, ...shops].map((item: any) => item.ownerId) } })
+              .select("fullName phone")
+              .lean()
+          ).map((owner: any) => [String(owner._id), owner])
+        )
+      : null;
+
+    const toPoint = (item: any, kind: "farm" | "shop") => {
+      const exact =
+        Number.isFinite(item.coordinates?.latitude) && Number.isFinite(item.coordinates?.longitude)
+          ? { latitude: item.coordinates.latitude, longitude: item.coordinates.longitude }
+          : null;
+      const fallback = exact ? null : this.approximateCoordinates(item.region, item.city);
+      const position = exact ?? (fallback ? this.spread(fallback, String(item._id)) : null);
+      if (!position) return null;
+      return {
+        _id: item._id,
+        kind,
+        name: item.name,
+        farmType: item.farmType,
+        description: item.description,
+        location: item.location,
+        city: item.city,
+        region: item.region,
+        phone: item.phone,
+        image: item.images?.[0],
+        latitude: position.latitude,
+        longitude: position.longitude,
+        approximate: !exact,
+        ...(options.includeAll
+          ? {
+              verificationStatus: item.verificationStatus,
+              status: item.status,
+              ownerName: owners?.get(String(item.ownerId))?.fullName
+            }
+          : {})
+      };
+    };
+
+    const data = [
+      ...farms.map((farm: any) => toPoint(farm, "farm")),
+      ...shops.map((shop: any) => toPoint(shop, "shop"))
+    ].filter(Boolean);
+    const missing = farms.length + shops.length - data.length;
+    return { data, meta: { total: data.length, withoutPosition: missing } };
+  }
+
+  /** Spreads approximate points a little so several listings in one city do not stack. */
+  private spread(point: { latitude: number; longitude: number }, seed: string) {
+    let hash = 0;
+    for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+    const angle = ((hash >>> 0) % 360) * (Math.PI / 180);
+    const distance = 0.01 + (((hash >>> 8) % 100) / 100) * 0.03; // about 1–4 km
+    return {
+      latitude: Math.round((point.latitude + Math.sin(angle) * distance) * 1e5) / 1e5,
+      longitude: Math.round((point.longitude + Math.cos(angle) * distance) * 1e5) / 1e5
     };
   }
 

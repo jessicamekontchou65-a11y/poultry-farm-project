@@ -6,6 +6,7 @@ import type { Farm } from "@/lib/types";
 import { useAuth } from "../../../AuthContext";
 import { useLanguage } from "../../../LanguageContext";
 import DashboardShell from "../../../components/DashboardShell";
+import { type LatLng, LocationPicker } from "../../../components/map";
 import {
   AlertCircle,
   ArrowRight,
@@ -35,6 +36,7 @@ export default function FarmerFarmsPage() {
   const [location, setLocation] = useState("");
   const [city, setCity] = useState("");
   const [region, setRegion] = useState("");
+  const [coordinates, setCoordinates] = useState<LatLng | null>(null);
   const [description, setDescription] = useState("");
   const [phone, setPhone] = useState("");
   const [docName, setDocName] = useState("");
@@ -111,6 +113,7 @@ export default function FarmerFarmsPage() {
         region,
         description,
         phone,
+        ...(coordinates ? { coordinates } : {}),
         verificationDocument: docDataUrl,
         verificationDocumentName: docName,
         pickupAvailable: true,
@@ -123,6 +126,7 @@ export default function FarmerFarmsPage() {
       setLocation("");
       setCity("");
       setRegion("");
+      setCoordinates(null);
       setDescription("");
       setPhone("");
       setDocName("");
@@ -292,6 +296,11 @@ export default function FarmerFarmsPage() {
                 <div className="form-group">
                   <label>{t("farm.create.region")}</label>
                   <input type="text" value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Littoral" />
+                </div>
+
+                <div className="form-group">
+                  <label>{lang === "en" ? "Exact position on the map" : "Position exacte sur la carte"}</label>
+                  <LocationPicker value={coordinates} onChange={setCoordinates} lang={lang} height={260} />
                 </div>
 
                 <div className="form-group">

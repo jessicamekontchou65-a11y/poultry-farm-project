@@ -13,6 +13,7 @@ import { PoultryBotController } from "./poultrybot.controller";
 import { PlatformController } from "./platform.controller";
 import { FarmOpsController } from "./farm-ops.controller";
 import { CampayController } from "../payments/campay.controller";
+import { MapController } from "./map.controller";
 import { CampayService } from "../payments/campay.service";
 
 @Module({
@@ -25,7 +26,8 @@ import { CampayService } from "../payments/campay.service";
     PoultryBotController,
     PlatformController,
     FarmOpsController,
-    CampayController
+    CampayController,
+    MapController
   ],
   providers: [ResourcesService, DomainService, CampayService],
   exports: [ResourcesService]

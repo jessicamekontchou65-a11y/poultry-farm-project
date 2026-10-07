@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import {
   BookOpen,
+  Map as MapIcon,
   Egg,
   LayoutDashboard,
   LogIn,
@@ -51,9 +52,13 @@ export default function AppNav() {
             <Store size={16} />
             {t("nav.shops")}
           </Link>
-          <Link href="/knowledge">
+          <Link href="/map">
+            <MapIcon size={16} />
+            {t("nav.map")}
+          </Link>
+          <Link href="/knowledge" title={t("nav.knowledge")}>
             <BookOpen size={16} />
-            {t("nav.knowledge")}
+            {t("nav.knowledge_short")}
           </Link>
           <Link href="/dashboard/customer">
             <LayoutDashboard size={16} />
@@ -111,6 +116,10 @@ export default function AppNav() {
         <Link href="/shops" onClick={closeMobileMenu}>
           <Store size={18} />
           {t("nav.shops")}
+        </Link>
+        <Link href="/map" onClick={closeMobileMenu}>
+          <MapIcon size={18} />
+          {t("nav.map")}
         </Link>
         <Link href="/knowledge" onClick={closeMobileMenu}>
           <BookOpen size={18} />

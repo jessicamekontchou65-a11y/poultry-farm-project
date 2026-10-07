@@ -6,6 +6,8 @@ import type { Shop, Product, Category } from "@/lib/types";
 import { useAuth } from "../../../AuthContext";
 import { useLanguage } from "../../../LanguageContext";
 import DashboardShell from "../../../components/DashboardShell";
+import { type LatLng, LocationPicker } from "../../../components/map";
+import EditLocationPanel from "../../../components/map/EditLocationPanel";
 import { Store, Plus, ShoppingBag, DollarSign } from "lucide-react";
 
 export default function ShopkeeperShopsPage() {
@@ -22,6 +24,8 @@ export default function ShopkeeperShopsPage() {
   const [shopLocation, setShopLocation] = useState("");
   const [shopCity, setShopCity] = useState("");
   const [shopRegion, setShopRegion] = useState("");
+  const [shopCoordinates, setShopCoordinates] = useState<LatLng | null>(null);
+  const [locatingShopId, setLocatingShopId] = useState<string | null>(null);
   const [shopDescription, setShopDescription] = useState("");
   const [shopPhone, setShopPhone] = useState("");
   const [shopMsg, setShopMsg] = useState("");
@@ -94,6 +98,7 @@ export default function ShopkeeperShopsPage() {
         region: shopRegion,
         description: shopDescription,
         phone: shopPhone,
+        ...(shopCoordinates ? { coordinates: shopCoordinates } : {}),
         verificationDocument: docDataUrl,
         verificationDocumentName: docName,
         pickupAvailable: true,
@@ -106,6 +111,7 @@ export default function ShopkeeperShopsPage() {
       setShopLocation("");
       setShopCity("");
       setShopRegion("");
+      setShopCoordinates(null);
       setShopDescription("");
       setShopPhone("");
       setDocName("");
@@ -181,14 +187,38 @@ export default function ShopkeeperShopsPage() {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                     {shops.map((s) => (
-                      <div key={s._id} className="glass-card" style={{ padding: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div>
-                          <h3 style={{ fontSize: "1rem", fontWeight: "700" }}>{s.name}</h3>
-                          <p style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}>📍 {s.location}, {s.city}</p>
+                      <div key={s._id} className="glass-card" style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
+                          <div>
+                            <h3 style={{ fontSize: "1rem", fontWeight: "700" }}>{s.name}</h3>
+                            <p style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}>📍 {s.location}, {s.city}</p>
+                          </div>
+                          <span className={`status-badge ${s.verificationStatus}`}>
+                            {s.verificationStatus === "approved" ? (lang === "en" ? "verified" : "vérifié") : s.verificationStatus === "pending" ? (lang === "en" ? "pending" : "en attente") : s.verificationStatus === "rejected" ? (lang === "en" ? "rejected" : "rejeté") : s.verificationStatus}
+                          </span>
                         </div>
-                        <span className={`status-badge ${s.verificationStatus}`}>
-                          {s.verificationStatus === "approved" ? (lang === "en" ? "verified" : "vérifié") : s.verificationStatus === "pending" ? (lang === "en" ? "pending" : "en attente") : s.verificationStatus === "rejected" ? (lang === "en" ? "rejected" : "rejeté") : s.verificationStatus}
-                        </span>
+                        <button
+                          type="button"
+                          className="kca-btn kca-btn--ghost"
+                          style={{ alignSelf: "flex-start" }}
+                          aria-expanded={locatingShopId === s._id}
+                          onClick={() => setLocatingShopId(locatingShopId === s._id ? null : s._id)}
+                        >
+                          📍 {s.coordinates
+                            ? lang === "en" ? "Edit map position" : "Modifier la position"
+                            : lang === "en" ? "Set map position" : "Définir la position"}
+                        </button>
+                        {locatingShopId === s._id && (
+                          <EditLocationPanel
+                            endpoint={`/shops/${s._id}`}
+                            initial={s.coordinates}
+                            token={token}
+                            lang={lang}
+                            onSaved={(value) =>
+                              setShops((prev) => prev.map((shop) => (shop._id === s._id ? { ...shop, coordinates: value ?? undefined } : shop)))
+                            }
+                          />
+                        )}
                       </div>
                     ))}
                   </div>
@@ -257,6 +287,10 @@ export default function ShopkeeperShopsPage() {
               <div className="form-group">
                 <label>{t("shop.create.loc")}</label>
                 <input type="text" value={shopLocation} onChange={(e) => setShopLocation(e.target.value)} required placeholder="Mvan block B" />
+              </div>
+              <div className="form-group">
+                <label>{lang === "en" ? "Exact position on the map" : "Position exacte sur la carte"}</label>
+                <LocationPicker value={shopCoordinates} onChange={setShopCoordinates} lang={lang} height={240} />
               </div>
               <div className="form-group">
                 <label>{t("shop.create.desc")}</label>

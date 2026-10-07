@@ -5,6 +5,9 @@ export const translations: Record<Lang, Record<string, string>> = {
     // Nav
     "nav.platform": "Platform",
     "nav.knowledge": "Knowledge Center",
+    "nav.map": "Map",
+    "nav.knowledge_short": "Guides",
+    "admin.tab.map": "Map",
     "dash.sidebar.expenses": "Expenses",
     "dash.sidebar.sales": "Sales",
     "dash.sidebar.products": "My Products",
@@ -311,6 +314,9 @@ export const translations: Record<Lang, Record<string, string>> = {
     // Nav
     "nav.platform": "Plateforme",
     "nav.knowledge": "Centre de connaissances",
+    "nav.map": "Carte",
+    "nav.knowledge_short": "Guides",
+    "admin.tab.map": "Carte",
     "dash.sidebar.expenses": "Dépenses",
     "dash.sidebar.sales": "Ventes",
     "dash.sidebar.products": "Mes produits",

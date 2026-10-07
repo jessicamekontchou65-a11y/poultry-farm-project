@@ -46,6 +46,7 @@ export type Farm = {
   rejectionReason?: string;
   openingHours?: string;
   pickupAvailable?: boolean;
+  coordinates?: { latitude: number; longitude: number };
 };
 
 /** Flock = PoultryBatch in the API */
@@ -127,6 +128,7 @@ export type Shop = {
   verificationStatus: "pending" | "approved" | "rejected";
   status: string;
   rejectionReason?: string;
+  coordinates?: { latitude: number; longitude: number };
 };
 
 export type Category = {

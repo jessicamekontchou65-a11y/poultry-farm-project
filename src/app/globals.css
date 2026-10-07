@@ -12773,3 +12773,119 @@ textarea.poultrybot-input {
 /* Notifications are clickable now. */
 button.notif-item { display: block; width: 100%; text-align: left; background: none; border: none; font: inherit; color: inherit; cursor: pointer; }
 button.notif-item:hover { background: var(--color-accent-subtle); }
+
+/* ==========================================================================
+   OpenStreetMap views (Leaflet)
+   ========================================================================== */
+.osm-map { width: 100%; border-radius: var(--radius-lg); overflow: hidden; z-index: 0; background: var(--color-bg-alt, #e5e7eb); }
+.osm-map--loading { animation: osm-pulse 1.4s ease-in-out infinite; }
+@keyframes osm-pulse { 50% { opacity: 0.6; } }
+.leaflet-container { font: inherit; }
+.leaflet-popup-content { margin: 12px 14px; }
+
+.map-pin {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  background: var(--pin); border: 2px solid #fff; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+}
+.map-pin > span { transform: rotate(45deg); font-size: 15px; line-height: 1; }
+.map-pin.is-approximate { opacity: 0.7; border-style: dashed; }
+.map-pin.is-selected { box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 0 0 7px var(--pin); }
+.map-pin--user { width: 18px; height: 18px; border-radius: 50%; transform: none; border-width: 3px; }
+
+.map-popup { display: flex; flex-direction: column; gap: 4px; min-width: 190px; font-size: 0.85rem; color: #0f172a; }
+.map-popup strong { font-size: 0.98rem; }
+.map-popup em { color: #b45309; font-size: 0.78rem; }
+.map-popup a { color: #047857; font-weight: 700; }
+.map-popup__kind { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
+.map-popup__kind--farm { color: #059669; }
+.map-popup__kind--shop { color: #d97706; }
+.map-popup__actions { display: flex; gap: 12px; margin-top: 6px; }
+
+/* Public map page */
+.map-page { padding-bottom: 40px; }
+.map-head, .map-filters, .map-layout, .map-status { width: min(1280px, calc(100% - 32px)); margin-left: auto; margin-right: auto; }
+.map-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; padding-top: 24px; }
+.map-head h1 { margin: 4px 0; font-family: var(--font-heading); font-size: clamp(1.6rem, 4vw, 2.4rem); }
+.map-head p { margin: 0; color: var(--color-text-secondary); }
+.map-locate-btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: var(--radius-pill);
+  border: none; background: #2563eb; color: #fff; font-weight: 700; cursor: pointer;
+}
+.map-locate-btn:disabled { opacity: 0.7; }
+.map-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; align-items: center; }
+.map-filters select { padding: 10px 14px; border-radius: var(--radius-pill); border: 1px solid var(--color-border); background: var(--color-bg-elevated); color: var(--color-text); font: inherit; }
+.map-segment { display: inline-flex; padding: 4px; border-radius: var(--radius-pill); background: var(--color-bg-elevated); border: 1px solid var(--color-border); }
+.map-segment button { padding: 7px 16px; border-radius: var(--radius-pill); border: none; background: none; color: var(--color-text-secondary); font-weight: 700; cursor: pointer; }
+.map-segment button.is-active { background: var(--color-accent); color: #fff; }
+.map-search { flex: 1; min-width: 180px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-radius: var(--radius-pill); border: 1px solid var(--color-border); background: var(--color-bg-elevated); color: var(--color-text-muted); }
+.map-search input { flex: 1; min-width: 0; border: none; outline: none; background: none; padding: 10px 0; font: inherit; font-size: 16px; color: var(--color-text); }
+.map-status { color: var(--color-text-secondary); margin-top: 12px; }
+.map-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; margin-top: 16px; height: min(72vh, 760px); }
+.map-canvas { position: relative; min-height: 0; border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--color-border-subtle); }
+.map-legend {
+  position: absolute; left: 12px; bottom: 26px; z-index: 500; display: flex; gap: 12px; flex-wrap: wrap;
+  padding: 8px 12px; border-radius: 12px; background: rgba(255, 255, 255, 0.94); color: #0f172a; font-size: 0.78rem; font-weight: 700;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.15);
+}
+.map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.map-legend__dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.map-legend__dot--farm { background: #059669; }
+.map-legend__dot--shop { background: #d97706; }
+.map-legend__dot--approx { background: #94a3b8; border: 2px dashed #fff; outline: 1px solid #94a3b8; }
+.map-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.map-list__empty { color: var(--color-text-secondary); padding: 16px; }
+.map-card {
+  width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; text-align: left; cursor: pointer;
+  border-radius: var(--radius-md); border: 1px solid var(--color-border-subtle); background: var(--color-bg-elevated); color: var(--color-text); font: inherit;
+}
+.map-card:hover, .map-card.is-selected { border-color: var(--color-accent); }
+.map-card.is-selected { box-shadow: 0 0 0 3px var(--color-accent-subtle); }
+.map-card__icon { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0; }
+.map-card__icon--farm { background: rgba(5, 150, 105, 0.12); color: #059669; }
+.map-card__icon--shop { background: rgba(217, 119, 6, 0.12); color: #d97706; }
+.map-card__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.map-card__body strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-card__body span { display: inline-flex; align-items: center; gap: 4px; font-size: 0.82rem; color: var(--color-text-secondary); }
+.map-card__distance { font-weight: 800; color: #2563eb; font-size: 0.85rem; white-space: nowrap; }
+.map-card__actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 4px 2px; }
+.map-card__actions a {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: var(--radius-pill);
+  background: var(--color-accent-subtle); color: var(--color-accent); font-weight: 700; font-size: 0.85rem; text-decoration: none;
+}
+@media (max-width: 900px) {
+  .map-layout { grid-template-columns: 1fr; height: auto; }
+  .map-canvas { height: 58vh; }
+  .map-list { overflow: visible; }
+}
+
+/* Location picker (farm and shop forms) */
+.location-picker { display: flex; flex-direction: column; gap: 10px; }
+.location-picker__bar { display: flex; flex-wrap: wrap; gap: 8px; }
+.location-picker__btn {
+  display: inline-flex !important; align-items: center; gap: 8px; width: auto !important; min-height: 40px !important;
+  padding: 8px 14px; border-radius: 10px; border: none; background: #2563eb !important; color: #fff !important; font-weight: 700; cursor: pointer;
+}
+.location-picker__btn--ghost { background: var(--color-bg-elevated) !important; color: var(--color-text) !important; border: 1px solid var(--color-border); }
+.location-picker__hint { margin: 0; font-size: 0.82rem; color: var(--color-text-secondary); }
+.location-picker__coords { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.location-picker__coords label { display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; font-weight: 700; color: var(--color-text-secondary); }
+.location-picker__coords input { padding: 9px 12px; border-radius: 10px; border: 1px solid var(--color-border); background: var(--color-bg-elevated); color: var(--color-text); font: inherit; font-size: 16px; }
+.location-picker .osm-map { border: 1px solid var(--color-border-subtle); cursor: crosshair; }
+
+/* Mini map on public farm and shop pages */
+.listing-map { display: flex; flex-direction: column; gap: 10px; }
+.listing-map__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.listing-map__actions a { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: var(--radius-pill); background: var(--color-accent-subtle); color: var(--color-accent); font-weight: 700; font-size: 0.88rem; text-decoration: none; }
+
+/* With Map and Guides added, the public links no longer fit on one row below ~1280px:
+   move them to a scrollable second row, as on tablets. */
+@media (min-width: 981px) and (max-width: 1280px) {
+  .app-nav { flex-wrap: wrap; border-radius: 28px; }
+  .app-nav-links { width: 100%; overflow-x: auto; justify-content: center; order: 3; }
+}
+.edit-location { display: flex; flex-direction: column; gap: 12px; }
+.edit-location__head { display: flex; gap: 10px; align-items: flex-start; }
+.edit-location__head svg { color: var(--color-accent); flex-shrink: 0; margin-top: 2px; }
+.edit-location__head p { margin: 2px 0 0; font-size: 0.85rem; color: var(--color-text-secondary); }
+.edit-location__save { align-self: flex-start; }

@@ -3,6 +3,7 @@
 import { useEffect, useState, use } from "react";
 import { api } from "@/lib/api";
 import type { Shop, Product } from "@/lib/types";
+import ListingMiniMap from "../../components/map/ListingMiniMap";
 import AppNav from "../../components/AppNav";
 import {
   ArrowLeft,
@@ -170,6 +171,7 @@ export default function ShopDetailPage({ params }: { params: Promise<{ id: strin
                     <strong>{lang === "en" ? "Approved and active" : "Approuvé et actif"}</strong>
                   </div>
                 </div>
+                <ListingMiniMap listing={shop} kind="shop" lang={lang} />
               </aside>
 
               <section className="directory-catalog-section">

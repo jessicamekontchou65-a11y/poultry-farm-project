@@ -20,6 +20,7 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { OptionalJwtGuard } from "../common/guards/optional-jwt.guard";
+import { parseCoordinates } from "../common/coordinates";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { schemaNames } from "../database/schema-names";
 import { AuthUser, DomainService } from "./domain.service";
@@ -53,7 +54,8 @@ export class SrsController {
       );
     }
     return this.resources.create("farms", {
-      ...body,
+      ...omit(body, OWNER_BLOCKED_FIELDS),
+      coordinates: parseCoordinates(body.coordinates) ?? undefined,
       ownerId: user.id,
       verificationStatus: "pending"
     });
@@ -107,7 +109,8 @@ export class SrsController {
       );
     }
     return this.resources.create("shops", {
-      ...body,
+      ...omit(body, OWNER_BLOCKED_FIELDS),
+      coordinates: parseCoordinates(body.coordinates) ?? undefined,
       ownerId: user.id,
       verificationStatus: "pending"
     });
@@ -144,7 +147,10 @@ export class SrsController {
     @Body() body: Record<string, unknown>
   ) {
     await this.domain.assertShopAccess(user, id);
-    return this.resources.update("shops", id, omit(body, OWNER_BLOCKED_FIELDS));
+    const patch = omit(body, OWNER_BLOCKED_FIELDS);
+    const coordinates = parseCoordinates(body.coordinates);
+    if (coordinates !== undefined) patch.coordinates = coordinates;
+    return this.resources.update("shops", id, patch);
   }
 
   @UseGuards(JwtAuthGuard)
