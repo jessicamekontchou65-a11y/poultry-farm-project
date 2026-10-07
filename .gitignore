@@ -1,46 +1,62 @@
 # Dependencies
 node_modules/
+.pnpm-store/
+.yarn/*
+!.yarn/releases
+.pnp.*
 
 # Next.js
 .next/
 out/
 
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Build output (web + apps/api)
+dist/
+build/
+*.tsbuildinfo
 
-# Logs
+# Environment variables: never commit real secrets, keep the template
+.env
+.env.*
+!.env.example
+
+# Credentials and keys
+creds.md
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime state created by start.sh (logs, PIDs, local MongoDB data)
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
+yarn-error.log*
 pnpm-debug.log*
+.pids/
+*.pid
+.local/
+
+# Tests and tooling
+coverage/
+test-results/
+playwright-report/
+playwright/.cache/
+.cache/
+.turbo/
+.eslintcache
+
+# Deployment
+.vercel/
 
 # OS
 .DS_Store
 Thumbs.db
-
-# macOS artifacts
 __MACOSX/
 
-# IDE
+# IDE / editors
 .vscode/
 .idea/
-
-# Build / cache
-.cache/
-.turbo/
-coverage/
-dist/
-build/
-
-# TypeScript build info
-tsconfig.tsbuildinfo
-
-# Vercel
-.vercel/
-
-# Credentials
-creds.md
+*.swp
+*.swo
+*~
