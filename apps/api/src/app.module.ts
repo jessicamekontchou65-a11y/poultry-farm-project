@@ -11,7 +11,9 @@ import { ResourcesModule } from "./resources/resources.module";
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: [".env.local", ".env"]
+      // The API may start from apps/api (npm --prefix) or the repo root; read both places.
+      // Earlier files win, so a local apps/api/.env overrides the shared root one.
+      envFilePath: [".env.local", ".env", "../../.env.local", "../../.env"]
     }),
     MongooseModule.forRootAsync({
       inject: [ConfigService],
