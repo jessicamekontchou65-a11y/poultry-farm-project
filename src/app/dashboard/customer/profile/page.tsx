@@ -47,6 +47,7 @@ const PRESET_AVATARS = [
 
 export default function ProfilePage() {
   const { user, token, updateUser } = useAuth();
+  const userId = user?._id ?? user?.id;
   const { lang, t } = useLanguage();
 
   const [fullName, setFullName] = useState("");
@@ -92,8 +93,8 @@ export default function ProfilePage() {
       setIsVerified(user.isVerified || false);
       setStatus(user.status || "active");
 
-      if (token && user._id) {
-        api.get<any>(`/resources/users/${user._id}`, token)
+      if (token && userId) {
+        api.get<any>(`/resources/users/${userId}`, token)
           .then((res) => {
             const data = res.data;
             setFullName(data.fullName || "");
@@ -126,12 +127,12 @@ export default function ProfilePage() {
   // Handle personal profile and address details submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !user?._id) return;
+    if (!token || !user || !userId) return;
     setLoading(true);
     setMessage("");
 
     try {
-      await api.update(`/resources/users/${user._id}`, {
+      await api.update(`/resources/users/${userId}`, {
         fullName,
         phone,
         address,
@@ -167,12 +168,12 @@ export default function ProfilePage() {
 
   // Save profile photo avatar (Base64 data or SVG preset)
   const handleSaveAvatar = async (nextAvatar: string) => {
-    if (!token || !user?._id) return;
+    if (!token || !user || !userId) return;
     setLoading(true);
     setMessage("");
 
     try {
-      await api.update(`/resources/users/${user._id}`, {
+      await api.update(`/resources/users/${userId}`, {
         avatar: nextAvatar
       }, token);
 
@@ -214,7 +215,7 @@ export default function ProfilePage() {
 
   // Activate role on-demand
   const handleActivateRole = async (role: "farmer" | "shopkeeper") => {
-    if (!token || !user?._id) return;
+    if (!token || !user || !userId) return;
     if (roles.includes(role)) return;
 
     setLoading(true);
@@ -222,7 +223,7 @@ export default function ProfilePage() {
 
     try {
       const nextRoles = [...roles, role];
-      await api.update(`/resources/users/${user._id}`, {
+      await api.update(`/resources/users/${userId}`, {
         roles: nextRoles
       }, token);
 

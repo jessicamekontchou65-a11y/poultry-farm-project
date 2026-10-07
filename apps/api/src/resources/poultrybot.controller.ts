@@ -1,7 +1,8 @@
-import { Body, Controller, Headers, Post, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Headers, Post, Res, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { InjectConnection } from "@nestjs/mongoose";
+import type { Response } from "express";
 import { Connection } from "mongoose";
 import { getJwtSecret } from "../common/jwt-secrets";
 import { schemaNames } from "../database/schema-names";
@@ -18,6 +19,18 @@ interface VerifiedPayload {
 }
 
 type AiEngine = "openrouter" | "nvidia_nim" | "gemini" | "openai";
+
+type ChatBody = { message: string; history?: ChatMessage[]; lang?: string };
+
+type PreparedChat = {
+  message: string;
+  history: ChatMessage[];
+  lang: string;
+  userContext: any;
+};
+
+// A slow provider should hand over to the next engine instead of hanging the chat.
+const AI_REQUEST_TIMEOUT_MS = 45_000;
 
 class AiProviderError extends Error {
   constructor(
@@ -42,11 +55,92 @@ export class PoultryBotController {
   @Post("chat")
   async chat(
     @Headers("authorization") authHeader: string | undefined,
-    @Body() body: { message: string; history?: ChatMessage[]; lang?: string }
+    @Body() body: ChatBody
   ) {
-    const message = this.cleanText(body.message, 2000);
-    const history = this.sanitizeHistory(body.history);
-    const lang = body.lang === "fr" ? "fr" : "en";
+    return this.answer(authHeader, body);
+  }
+
+  /**
+   * Same contract as /chat, sent as Server-Sent Events so the reply appears as it is written.
+   * Events: {"delta": "..."} chunks, then {"done": true, "engine": "..."} or {"error": "..."}.
+   * Only OpenRouter streams; other engines and the local fallback arrive as a single delta.
+   */
+  @Post("chat/stream")
+  async chatStream(
+    @Headers("authorization") authHeader: string | undefined,
+    @Body() body: ChatBody,
+    @Res() res: Response
+  ) {
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const send = (event: Record<string, unknown>) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+    const abort = new AbortController();
+    res.on("close", () => abort.abort());
+
+    try {
+      const openRouterKey = this.config.get<string>("OPENROUTER_API_KEY");
+      const prepared = await this.prepare(authHeader, body);
+
+      if ("reply" in prepared) {
+        send({ delta: prepared.reply });
+        send({ done: true, engine: "local" });
+        return res.end();
+      }
+
+      if (openRouterKey && !this.isAiEngineCoolingDown("openrouter")) {
+        let streamedAny = false;
+        try {
+          await this.streamOpenRouter(prepared, openRouterKey, abort.signal, (delta) => {
+            streamedAny = true;
+            send({ delta });
+          });
+          send({ done: true, engine: "openrouter" });
+          return res.end();
+        } catch (err) {
+          if (abort.signal.aborted) return res.end();
+          this.coolDownAiEngine("openrouter", err);
+          this.logAiFailure("openrouter", err);
+          // Mid-answer failures cannot be retried cleanly; tell the client instead.
+          if (streamedAny) {
+            send({ error: "interrupted" });
+            return res.end();
+          }
+        }
+      }
+
+      const result = await this.respond(prepared, { skip: ["openrouter"] });
+      send({ delta: result.reply });
+      send({ done: true, engine: result.meta.engine });
+      res.end();
+    } catch (err) {
+      if (err instanceof UnauthorizedException) {
+        send({ error: "unauthorized" });
+      } else {
+        console.error("PoultryBot stream error:", err);
+        send({ error: "failed" });
+      }
+      res.end();
+    }
+  }
+
+  private async answer(authHeader: string | undefined, body: ChatBody) {
+    const prepared = await this.prepare(authHeader, body);
+    if ("reply" in prepared) return prepared;
+    return this.respond(prepared);
+  }
+
+  private async prepare(
+    authHeader: string | undefined,
+    body: ChatBody
+  ): Promise<PreparedChat | { reply: string }> {
+    const message = this.cleanText(body?.message, 2000);
+    const history = this.sanitizeHistory(body?.history);
+    const lang = body?.lang === "fr" ? "fr" : "en";
 
     if (!message) {
       return {
@@ -60,6 +154,13 @@ export class PoultryBotController {
     // 1. Gather authenticated user context. Guests are allowed, invalid bearer tokens are not.
     const tokenPayload = await this.verifyOptionalToken(authHeader);
     const userContext = tokenPayload?.sub ? await this.buildUserContext(tokenPayload.sub) : null;
+    return { message, history, lang, userContext };
+  }
+
+  private async respond(
+    { message, history, lang, userContext }: PreparedChat,
+    options: { skip?: AiEngine[] } = {}
+  ) {
 
     // 2. Select Response Engine
     const nvidiaNimKey =
@@ -92,7 +193,7 @@ export class PoultryBotController {
     ];
 
     for (const engine of engines) {
-      if (!engine.key) continue;
+      if (!engine.key || options.skip?.includes(engine.name)) continue;
       if (this.isAiEngineCoolingDown(engine.name)) continue;
 
       try {
@@ -347,31 +448,7 @@ export class PoultryBotController {
     apiKey: string,
     lang: string
   ): Promise<string> {
-    const baseUrl = this.config.get<string>("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1");
-    const model = this.config.get<string>("OPENROUTER_MODEL", "openai/gpt-4o-mini");
-    // Optional fallbacks OpenRouter tries in order if the primary model is down.
-    const fallbackModels = (this.config.get<string>("OPENROUTER_FALLBACK_MODELS") ?? "")
-      .split(",")
-      .map((m) => m.trim())
-      .filter(Boolean);
-
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        // Attribution headers recommended by OpenRouter.
-        "HTTP-Referer": this.config.get<string>("APP_URL", "http://localhost:3000").split(",")[0].trim(),
-        "X-Title": "PoultryHub"
-      },
-      body: JSON.stringify({
-        model,
-        ...(fallbackModels.length ? { models: [model, ...fallbackModels] } : {}),
-        messages: this.buildChatMessages(message, history, context, lang),
-        temperature: 0.25,
-        max_tokens: 2200
-      })
-    });
+    const response = await this.openRouterRequest({ message, history, lang, userContext: context }, apiKey, false);
 
     if (!response.ok) {
       throw new AiProviderError("openrouter", response.status);
@@ -383,6 +460,84 @@ export class PoultryBotController {
     return choice?.finish_reason === "length"
       ? `${text}\n\nI reached the response limit. Send “continue” and I will carry on from here.`
       : text;
+  }
+
+  private async streamOpenRouter(
+    chat: PreparedChat,
+    apiKey: string,
+    signal: AbortSignal,
+    onDelta: (delta: string) => void
+  ) {
+    const response = await this.openRouterRequest(chat, apiKey, true, signal);
+    if (!response.ok || !response.body) {
+      throw new AiProviderError("openrouter", response.status);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finishReason: string | undefined;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by blank lines; OpenRouter also sends ": keep-alive" comments.
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, boundary).trim();
+        buffer = buffer.slice(boundary + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(payload);
+          if (chunk.error) throw new AiProviderError("openrouter", Number(chunk.error.code) || 502);
+          const choice = chunk.choices?.[0];
+          if (choice?.delta?.content) onDelta(choice.delta.content);
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+        } catch (err) {
+          if (err instanceof AiProviderError) throw err;
+          // Ignore a malformed frame rather than dropping the whole answer.
+        }
+      }
+    }
+
+    if (finishReason === "length") {
+      onDelta("\n\nI reached the response limit. Send “continue” and I will carry on from here.");
+    }
+  }
+
+  private openRouterRequest(chat: PreparedChat, apiKey: string, stream: boolean, signal?: AbortSignal) {
+    const baseUrl = this.config.get<string>("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1");
+    const model = this.config.get<string>("OPENROUTER_MODEL", "openai/gpt-4o-mini");
+    // Optional fallbacks OpenRouter tries in order if the primary model is down.
+    const fallbackModels = (this.config.get<string>("OPENROUTER_FALLBACK_MODELS") ?? "")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean);
+    const timeout = AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS);
+
+    return fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        // Attribution headers recommended by OpenRouter.
+        "HTTP-Referer": this.config.get<string>("APP_URL", "http://localhost:3000").split(",")[0].trim(),
+        "X-Title": "PoultryHub"
+      },
+      body: JSON.stringify({
+        model,
+        ...(fallbackModels.length ? { models: [model, ...fallbackModels] } : {}),
+        messages: this.buildChatMessages(chat.message, chat.history, chat.userContext, chat.lang),
+        temperature: 0.25,
+        max_tokens: 2200,
+        stream
+      })
+    });
   }
 
   private buildChatMessages(message: string, history: ChatMessage[], context: any, lang: string) {
@@ -411,6 +566,7 @@ export class PoultryBotController {
     const messages = this.buildChatMessages(message, history, context, lang);
 
     const response = await fetch(url, {
+      signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -454,6 +610,7 @@ export class PoultryBotController {
     const prompt = `${systemInstruction}\n\nChat History:\n${conversationHistoryText}\nUser: ${message}\nPoultryBot:`;
 
     const response = await fetch(url, {
+      signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -487,6 +644,7 @@ export class PoultryBotController {
     const messages = this.buildChatMessages(message, history, context, lang);
 
     const response = await fetch(url, {
+      signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
       method: "POST",
       headers: {
         "Content-Type": "application/json",

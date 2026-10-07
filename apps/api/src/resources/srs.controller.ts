@@ -19,6 +19,7 @@ import { ConfigService } from "@nestjs/config";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { OptionalJwtGuard } from "../common/guards/optional-jwt.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { schemaNames } from "../database/schema-names";
 import { AuthUser, DomainService } from "./domain.service";
@@ -176,9 +177,10 @@ export class SrsController {
     });
   }
 
+  @UseGuards(OptionalJwtGuard)
   @Get("products/:id")
-  product(@Param("id") id: string) {
-    return this.resources.findOne("products", id);
+  product(@CurrentUser() user: AuthUser | null, @Param("id") id: string) {
+    return this.domain.getProductWithSeller(id, !!user);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -493,14 +495,16 @@ export class SrsController {
   }
 
   @Get("reviews/product/:productId")
-  productReviews(@Param("productId") productId: string, @Query() query: ListQuery) {
-    return this.resources.list("reviews", { ...query, productId, status: "published" });
+  async productReviews(@Param("productId") productId: string, @Query() query: ListQuery) {
+    return this.domain.withReviewerNames(
+      await this.resources.list("reviews", { ...query, productId, status: "published" })
+    );
   }
 
   @UseGuards(JwtAuthGuard)
   @Get("reports/farmer/overview")
   farmerReport(@CurrentUser() user: AuthUser) {
-    return this.resources.ownerOverview(user.id);
+    return this.domain.farmerOverview(user);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

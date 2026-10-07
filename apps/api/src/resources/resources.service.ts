@@ -124,38 +124,6 @@ export class ResourcesService {
     return this.getModel(resource).countDocuments(filter);
   }
 
-  async ownerOverview(ownerId: string) {
-    const [
-      farms,
-      shops,
-      products,
-      orders,
-      expenses,
-      farmSales,
-      notifications
-    ] = await Promise.all([
-      this.count("farms", { ownerId }),
-      this.count("shops", { ownerId }),
-      this.count("products", { ownerId }),
-      this.count("orders", { customerId: ownerId }),
-      this.count("expenses", { ownerId }),
-      this.count("farm-sales", { ownerId }),
-      this.count("notifications", { userId: ownerId, readAt: { $exists: false } })
-    ]);
-
-    return {
-      data: {
-        farms,
-        shops,
-        products,
-        orders,
-        expenses,
-        farmSales,
-        unreadNotifications: notifications
-      }
-    };
-  }
-
   async platformOverview() {
     const [
       totalUsers,

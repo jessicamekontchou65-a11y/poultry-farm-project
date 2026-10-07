@@ -17,6 +17,7 @@ type OrderPayment = {
   state: "waiting" | "paid" | "failed" | "submitted" | "error";
   paymentId?: string;
   ussdCode?: string;
+  chargedAmount?: number;
   message?: string;
 };
 
@@ -157,7 +158,8 @@ export default function CheckoutPage() {
         setOrderPayment(orderId, {
           state: "waiting",
           paymentId: res.data._id,
-          ussdCode: res.data.providerResponse?.ussdCode
+          ussdCode: res.data.providerResponse?.ussdCode,
+          chargedAmount: res.data.providerResponse?.chargedAmount
         });
         pollPayment(orderId, res.data._id, Date.now());
         return;
@@ -244,6 +246,14 @@ export default function CheckoutPage() {
                     {lang === "en"
                       ? "Confirm the payment on your phone (enter your mobile money PIN). Waiting for confirmation…"
                       : "Confirmez le paiement sur votre téléphone (saisissez votre code mobile money). En attente de confirmation…"}
+                    {payments[order._id].chargedAmount !== undefined &&
+                      payments[order._id].chargedAmount! < (order.totalAmount ?? 0) && (
+                      <div style={{ marginTop: 6 }}>
+                        {lang === "en"
+                          ? `Demo mode: only ${payments[order._id].chargedAmount} XAF will be debited.`
+                          : `Mode démo : seuls ${payments[order._id].chargedAmount} XAF seront débités.`}
+                      </div>
+                    )}
                     {payments[order._id].ussdCode && (
                       <div style={{ marginTop: 6 }}>
                         {lang === "en" ? "No prompt? Dial " : "Pas de notification ? Composez "}
@@ -278,6 +288,27 @@ export default function CheckoutPage() {
 
           <Link href="/dashboard/customer" className="auth-submit-btn" style={{ textDecoration: "none" }}>
             {lang === "en" ? "Go to Dashboard" : "Aller au tableau de bord"}
+          </Link>
+        </div>
+      </DashboardShell>
+    );
+  }
+
+  if (cart && cart.items.length === 0) {
+    return (
+      <DashboardShell>
+        <div className="dash-complete">
+          <div className="dash-complete__icon">
+            <Package size={34} />
+          </div>
+          <h1>{lang === "en" ? "Your cart is empty" : "Votre panier est vide"}</h1>
+          <p>
+            {lang === "en"
+              ? "Add products from the marketplace, then come back here to place your order."
+              : "Ajoutez des produits depuis le marché, puis revenez ici pour commander."}
+          </p>
+          <Link href="/marketplace" className="auth-submit-btn" style={{ textDecoration: "none" }}>
+            {lang === "en" ? "Browse the marketplace" : "Parcourir le marché"}
           </Link>
         </div>
       </DashboardShell>
@@ -325,6 +356,7 @@ export default function CheckoutPage() {
               <button
                 type="button"
                 className={`checkout-choice-btn ${wantsDelivery === true ? "is-active" : ""}`}
+                aria-pressed={wantsDelivery === true}
                 onClick={() => {
                   setWantsDelivery(true);
                   setDeliveryMethod("home_delivery");
@@ -338,6 +370,7 @@ export default function CheckoutPage() {
               <button
                 type="button"
                 className={`checkout-choice-btn ${wantsDelivery === false ? "is-active" : ""}`}
+                aria-pressed={wantsDelivery === false}
                 onClick={() => {
                   setWantsDelivery(false);
                   setDeliveryMethod("pickup_at_shop");

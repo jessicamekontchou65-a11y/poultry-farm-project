@@ -134,7 +134,7 @@ export default function CustomerMessagesPage() {
                     </p>
                   ) : (
                     messages.map((msg, idx) => {
-                      const isMe = String(msg.senderId) === String(user?._id);
+                      const isMe = String(msg.senderId) === String(user?._id ?? user?.id);
                       return (
                         <div
                           key={idx}

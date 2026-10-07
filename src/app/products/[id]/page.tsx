@@ -41,17 +41,11 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   useEffect(() => {
     setStatus(lang === "en" ? "Loading details..." : "Chargement des détails...");
     api
-      .get<Product>(`/products/${id}`)
+      .get<Product & { seller?: any }>(`/products/${id}`, token)
       .then((res) => {
         setProduct(res.data);
+        setSeller(res.data.seller ?? null);
         setStatus("");
-        
-        // Fetch seller details
-        if (res.data.ownerId) {
-          api.get<any>(`/resources/users/${res.data.ownerId}`, token)
-            .then((uRes) => setSeller(uRes.data))
-            .catch(() => {});
-        }
       })
       .catch((err) => setStatus(err instanceof Error ? err.message : (lang === "en" ? "Error loading details" : "Erreur lors du chargement des détails")));
 
@@ -222,7 +216,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                     type="button"
                     onClick={handleAddToCart}
                     className="auth-submit-btn marketplace-btn-glow"
-                    style={{ margin: 0, flex: "1 1 220px", display: "flex", justifySelf: "center", alignItems: "center", justifyContent: "center", gap: "8px", borderRadius: "10px", padding: "12px 24px", fontWeight: "700" }}
+                    style={{ margin: 0, background: "var(--color-accent)", color: "#fff", flex: "1 1 220px", display: "flex", justifySelf: "center", alignItems: "center", justifyContent: "center", gap: "8px", borderRadius: "10px", padding: "12px 24px", fontWeight: "700" }}
                     disabled={cartLoading || product.quantity <= 0}
                   >
                     <ShoppingBag size={18} />
@@ -257,7 +251,15 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                       </div>
                       <div>
                         <h4 style={{ fontWeight: "700" }}>{seller.fullName}</h4>
-                        <p style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>{seller.email}</p>
+                        {seller.email ? (
+                          <p style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>{seller.email}</p>
+                        ) : (
+                          (seller.city || seller.region) && (
+                            <p style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+                              {[seller.city, seller.region].filter(Boolean).join(", ")}
+                            </p>
+                          )
+                        )}
                       </div>
                     </div>
                     {seller.phone && <p style={{ fontSize: "0.85rem" }}>☎ {seller.phone}</p>}
@@ -265,7 +267,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                       type="button"
                       onClick={handleStartChat}
                       className="auth-submit-btn"
-                      style={{ background: "var(--color-accent-subtle)", color: "var(--color-accent)", display: "flex", alignItems: "center", gap: "8px", justifyContent: "center" }}
+                      style={{ background: "var(--color-accent-subtle)", color: "var(--color-accent)", display: "flex", alignItems: "center", gap: "8px", justifyContent: "center", margin: 0, minHeight: "44px", borderRadius: "10px", fontWeight: 700 }}
                       disabled={chatLoading}
                     >
                       <MessageSquare size={16} />
@@ -279,7 +281,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                     )}
                   </div>
                 ) : (
-                  <p style={{ color: "var(--color-text-secondary)" }}>{lang === "en" ? "Loading seller information..." : "Chargement des informations du vendeur..."}</p>
+                  <p style={{ color: "var(--color-text-secondary)" }}>{lang === "en" ? "Seller information unavailable." : "Informations du vendeur indisponibles."}</p>
                 )}
               </div>
 
@@ -288,6 +290,14 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                 <h3 style={{ fontWeight: "800", fontSize: "1.1rem" }}>{t("market.detail.reviews")}</h3>
 
                 {/* Add Review Form */}
+                {!token ? (
+                  <p style={{ fontSize: "0.9rem", color: "var(--color-text-secondary)" }}>
+                    <Link href="/login" className="dash-primary-link" style={{ display: "inline-flex", marginRight: 8 }}>
+                      {lang === "en" ? "Log in" : "Connectez-vous"}
+                    </Link>
+                    {lang === "en" ? "to leave a review." : "pour laisser un avis."}
+                  </p>
+                ) : (
                 <form onSubmit={submitReview} className="connected-form" style={{ borderBottom: "1px solid var(--color-border-subtle)", paddingBottom: "20px" }}>
                   <div className="form-group">
                     <label>{t("market.detail.rating")}</label>
@@ -306,6 +316,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                   </button>
                   {reviewMsg && <p className="form-success-banner" style={{ marginTop: "10px" }}>{reviewMsg}</p>}
                 </form>
+                )}
 
                 {/* List */}
                 <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -317,7 +328,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                     reviews.map((rev, index) => (
                       <div key={index} style={{ display: "flex", flexDirection: "column", gap: "6px", borderBottom: "1px solid var(--color-border-subtle)", paddingBottom: "12px" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <span style={{ fontWeight: "700", fontSize: "0.85rem" }}>{lang === "en" ? "User" : "Utilisateur"}</span>
+                          <span style={{ fontWeight: "700", fontSize: "0.85rem" }}>{rev.customerName ?? (lang === "en" ? "Customer" : "Client")}</span>
                           <span style={{ color: "var(--color-gold)", fontWeight: "800" }}>{"★".repeat(rev.rating)}</span>
                         </div>
                         <p style={{ fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>{rev.comment}</p>

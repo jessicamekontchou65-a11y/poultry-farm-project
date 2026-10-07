@@ -5,13 +5,15 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "../AuthContext";
 import { useLanguage } from "../LanguageContext";
 import { API_URL } from "@/lib/api";
-import { MessageSquare, X, Send, RotateCcw } from "lucide-react";
+import { MessageSquare, X, Send, RotateCcw, Square, RefreshCw } from "lucide-react";
 
 interface ChatMessage {
   id: string;
   role: "user" | "bot";
   content: string;
   createdAt: number;
+  /** The question to resend when this bot message reports a failure. */
+  retryOf?: string;
 }
 
 const makeMessageId = () => `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -434,8 +436,10 @@ export default function PoultryBot() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const userMemoryId = user?.id || user?._id || user?.email || "guest";
   const storageKey = useMemo(() => `poultryhub:poultrybot:${userMemoryId}:${lang}`, [userMemoryId, lang]);
 
@@ -490,7 +494,7 @@ export default function PoultryBot() {
 
   useEffect(() => {
     if (messages.length === 0) return;
-    localStorage.setItem(storageKey, JSON.stringify(messages.slice(-30)));
+    localStorage.setItem(storageKey, JSON.stringify(messages.filter((m) => m.content).slice(-30)));
   }, [messages, storageKey]);
 
   // Scroll to bottom of chat
@@ -500,61 +504,126 @@ export default function PoultryBot() {
     }
   }, [messages, isLoading, isOpen]);
 
-  const handleSendMessage = async (textToSend: string) => {
-    if (!textToSend.trim() || isLoading) return;
+  const appendToMessage = (id: string, delta: string) =>
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: m.content + delta } : m)));
 
-    const userMsg = makeUserMessage(textToSend);
+  const failureMessage = (kind: "auth" | "network" | "interrupted") => {
+    if (kind === "auth") {
+      return lang === "en"
+        ? "Your session has expired, so I cleared protected context. Please log in again before asking about private farm, shop, cart, or order data."
+        : "Votre session a expiré, donc j'ai supprimé le contexte protégé. Veuillez vous reconnecter avant de demander des données privées.";
+    }
+    if (kind === "interrupted") {
+      return lang === "en" ? "\n\n_(The answer was interrupted.)_" : "\n\n_(La réponse a été interrompue.)_";
+    }
+    return lang === "en"
+      ? "I could not reach the assistant service. Please try again in a few moments."
+      : "Je n'ai pas pu joindre le service assistant. Veuillez réessayer dans quelques instants.";
+  };
+
+  const handleSendMessage = async (textToSend: string) => {
+    const text = textToSend.trim();
+    if (!text || isLoading) return;
+
+    const userMsg = makeUserMessage(text);
+    const botMsg = makeBotMessage("");
     const historyForRequest = messages
+      .filter((m) => m.content && !m.retryOf)
       .slice(-16)
       .map((m) => ({ role: m.role, content: m.content }));
 
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev, userMsg, botMsg]);
     setInput("");
     setIsLoading(true);
+    setStreamingId(botMsg.id);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let received = "";
 
     try {
-      const response = await fetch(`${API_URL}/poultrybot/chat`, {
+      const response = await fetch(`${API_URL}/poultrybot/chat/stream`, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
-        body: JSON.stringify({
-          message: textToSend,
-          history: historyForRequest,
-          lang
-        })
+        body: JSON.stringify({ message: text, history: historyForRequest, lang })
       });
 
-      if (!response.ok) {
-        if (response.status === 401) {
-          logout();
-          throw new Error("AUTH_EXPIRED");
+      if (response.status === 401) throw new Error("AUTH_EXPIRED");
+      if (response.status === 429) {
+        appendToMessage(
+          botMsg.id,
+          lang === "en"
+            ? "You are sending messages very quickly. Please wait a few minutes and try again."
+            : "Vous envoyez beaucoup de messages. Patientez quelques minutes puis réessayez."
+        );
+        return;
+      }
+      if (!response.ok || !response.body) throw new Error("NETWORK");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, boundary).trim();
+          buffer = buffer.slice(boundary + 2);
+          if (!frame.startsWith("data:")) continue;
+          const event = JSON.parse(frame.slice(5));
+          if (event.delta) {
+            received += event.delta;
+            appendToMessage(botMsg.id, event.delta);
+          }
+          if (event.error === "unauthorized") throw new Error("AUTH_EXPIRED");
+          if (event.error === "interrupted") appendToMessage(botMsg.id, failureMessage("interrupted"));
+          if (event.error && event.error !== "interrupted") throw new Error("NETWORK");
         }
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.message || "Failed to connect to PoultryBot API");
       }
 
-      const data = await response.json();
-      setMessages((prev) => [...prev, makeBotMessage(data.reply)]);
+      if (!received) throw new Error("NETWORK");
     } catch (err) {
-      console.error(err);
+      if (controller.signal.aborted) {
+        if (!received) setMessages((prev) => prev.filter((m) => m.id !== botMsg.id));
+        return;
+      }
       const isAuthError = err instanceof Error && err.message === "AUTH_EXPIRED";
-      setMessages((prev) => [
-        ...prev,
-        makeBotMessage(
-          isAuthError
-            ? lang === "en"
-              ? "Your session has expired, so I cleared protected context. Please log in again before asking about private farm, shop, cart, or order data."
-              : "Votre session a expiré, donc j'ai supprimé le contexte protégé. Veuillez vous reconnecter avant de demander des données privées."
-            : lang === "en"
-            ? "I could not reach the assistant service securely. Please try again in a few moments."
-            : "Je n'ai pas pu joindre le service assistant de manière sécurisée. Veuillez réessayer dans quelques instants."
+      if (isAuthError) logout();
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === botMsg.id
+            ? received
+              ? { ...m, content: m.content + failureMessage("interrupted") }
+              : { ...m, content: failureMessage(isAuthError ? "auth" : "network"), retryOf: isAuthError ? undefined : text }
+            : m
         )
-      ]);
+      );
     } finally {
+      abortRef.current = null;
+      setStreamingId(null);
       setIsLoading(false);
     }
+  };
+
+  const handleStop = () => abortRef.current?.abort();
+
+  const handleRetry = (failed: ChatMessage) => {
+    if (!failed.retryOf || isLoading) return;
+    const question = failed.retryOf;
+    // Drop the failed exchange, then ask again.
+    setMessages((prev) => {
+      const index = prev.findIndex((m) => m.id === failed.id);
+      return index > 0 ? [...prev.slice(0, index - 1), ...prev.slice(index + 1)] : prev;
+    });
+    setTimeout(() => handleSendMessage(question), 0);
   };
 
   const handleClearMemory = () => {
@@ -566,6 +635,14 @@ export default function PoultryBot() {
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     handleSendMessage(input);
+  };
+
+  // Enter sends, Shift+Enter adds a new line.
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      handleSendMessage(input);
+    }
   };
 
   const handleInternalLinkClick = (href: string) => {
@@ -642,15 +719,23 @@ export default function PoultryBot() {
 
           {/* Messages Log */}
           <div className="poultrybot-messages">
-            {messages.map((m) => (
-              <div 
-                key={m.id} 
-                className={`poultrybot-bubble poultrybot-bubble--${m.role === "bot" ? "bot" : "user"}`}
-              >
-                {renderMarkdown(m.content, handleInternalLinkClick)}
-              </div>
-            ))}
-            {isLoading && (
+            {messages.map((m) =>
+              m.id === streamingId && !m.content ? null : (
+                <div
+                  key={m.id}
+                  className={`poultrybot-bubble poultrybot-bubble--${m.role === "bot" ? "bot" : "user"}`}
+                >
+                  {renderMarkdown(m.content, handleInternalLinkClick)}
+                  {m.retryOf && !isLoading && (
+                    <button type="button" className="poultrybot-retry-btn" onClick={() => handleRetry(m)}>
+                      <RefreshCw size={13} />
+                      {lang === "en" ? "Try again" : "Réessayer"}
+                    </button>
+                  )}
+                </div>
+              )
+            )}
+            {isLoading && !messages.find((m) => m.id === streamingId)?.content && (
               <div className="poultrybot-bubble poultrybot-bubble--bot">
                 <div className="poultrybot-typing">
                   <span className="poultrybot-typing__dot" />
@@ -680,21 +765,36 @@ export default function PoultryBot() {
           {/* Chat Footer Input */}
           <div className="poultrybot-footer">
             <form onSubmit={handleFormSubmit} className="poultrybot-form">
-              <input 
-                type="text"
+              <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleInputKeyDown}
                 placeholder={t("bot.placeholder")}
                 className="poultrybot-input"
-                disabled={isLoading}
+                rows={1}
+                maxLength={2000}
+                aria-label={t("bot.placeholder")}
               />
-              <button 
-                type="submit" 
-                className="poultrybot-send-btn" 
-                disabled={!input.trim() || isLoading}
-              >
-                <Send size={16} />
-              </button>
+              {isLoading ? (
+                <button
+                  type="button"
+                  className="poultrybot-send-btn"
+                  onClick={handleStop}
+                  aria-label={lang === "en" ? "Stop answering" : "Arrêter la réponse"}
+                  title={lang === "en" ? "Stop" : "Arrêter"}
+                >
+                  <Square size={14} />
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="poultrybot-send-btn"
+                  disabled={!input.trim()}
+                  aria-label={lang === "en" ? "Send" : "Envoyer"}
+                >
+                  <Send size={16} />
+                </button>
+              )}
             </form>
           </div>
         </div>

@@ -50,7 +50,19 @@ async function bootstrap() {
     ["/api/auth/login", "/api/auth/register"],
     rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false })
   );
-  app.use(compression());
+  // Each assistant message can cost AI credits: cap it per client.
+  app.use(
+    "/api/poultrybot",
+    rateLimit({ windowMs: 10 * 60 * 1000, limit: 40, standardHeaders: "draft-8", legacyHeaders: false })
+  );
+  app.use(
+    compression({
+      // Compression buffers output, which would hold back streamed assistant replies.
+      filter: (req, res) =>
+        !String(res.getHeader("Content-Type") ?? "").startsWith("text/event-stream") &&
+        compression.filter(req, res)
+    })
+  );
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

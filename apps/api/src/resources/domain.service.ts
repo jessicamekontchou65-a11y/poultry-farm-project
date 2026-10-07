@@ -998,6 +998,64 @@ export class DomainService {
     return { data: payment };
   }
 
+  /** Product detail plus the seller's public profile; contact details only for signed-in users. */
+  async getProductWithSeller(productId: string, includeContact: boolean) {
+    const product = await this.findById(schemaNames.Product, productId);
+    const fields = includeContact ? "fullName avatar city region phone email" : "fullName avatar city region";
+    const seller = await this.model(schemaNames.User).findById(product.ownerId).select(fields).lean();
+    return { data: { ...product.toObject(), seller } };
+  }
+
+  async withReviewerNames<T extends { data: any[] }>(result: T) {
+    const ids = [...new Set(result.data.map((review) => String(review.customerId)))];
+    const users = await this.model(schemaNames.User).find({ _id: { $in: ids } }).select("fullName avatar").lean();
+    const byId = new Map(users.map((u: any) => [String(u._id), u]));
+    result.data = result.data.map((review) => ({
+      ...review,
+      customerName: byId.get(String(review.customerId))?.fullName,
+      customerAvatar: byId.get(String(review.customerId))?.avatar
+    }));
+    return result;
+  }
+
+  /** Headline production and finance figures across every farm the user owns. */
+  async farmerOverview(user: AuthUser) {
+    const farmIds = (
+      await this.model(schemaNames.Farm).find({ ownerId: user.id, status: { $ne: "deleted" } }).select("_id").lean()
+    ).map((farm: any) => farm._id);
+    const byFarm = { farmId: { $in: farmIds } };
+    const sum = async (modelName: string, field: string, match: Record<string, unknown>) => {
+      const [row] = await this.model(modelName).aggregate([
+        { $match: match },
+        { $group: { _id: null, total: { $sum: `$${field}` } } }
+      ]);
+      return Number(row?.total ?? 0);
+    };
+
+    const [activeBatches, allTimeInitial, deaths, feedCost, revenue, expenses] = await Promise.all([
+      this.model(schemaNames.PoultryBatch).find({ ...byFarm, status: "active" }).select("currentQuantity").lean(),
+      sum(schemaNames.PoultryBatch, "initialQuantity", byFarm),
+      sum(schemaNames.MortalityRecord, "numberOfDeaths", byFarm),
+      sum(schemaNames.FeedingRecord, "cost", byFarm),
+      sum(schemaNames.FarmSale, "totalAmount", byFarm),
+      sum(schemaNames.Expense, "amount", { ownerId: new Types.ObjectId(user.id) })
+    ]);
+
+    return {
+      data: {
+        farms: farmIds.length,
+        birds: activeBatches.reduce((total: number, batch: any) => total + Number(batch.currentQuantity ?? 0), 0),
+        batches: activeBatches.length,
+        mortality: allTimeInitial ? Math.round((deaths / allTimeInitial) * 1000) / 10 : 0,
+        feedCost,
+        revenue,
+        expenses,
+        // Same definition as the reports page: revenue minus recorded expenses.
+        profit: revenue - expenses
+      }
+    };
+  }
+
   async getOrderForUser(user: AuthUser, orderId: string) {
     const order = await this.findById(schemaNames.Order, orderId);
     const isParty = String(order.customerId) === user.id || String(order.sellerId) === user.id;

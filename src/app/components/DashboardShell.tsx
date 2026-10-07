@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "../AuthContext";
 import { useLanguage } from "../LanguageContext";
 import ThemeToggle from "../ThemeToggle";
@@ -293,25 +293,9 @@ export default function DashboardShell({
             <p className="ds-sidebar__section-label">
               {lang === "en" ? "Navigation" : "Navigation"}
             </p>
-            <nav className="ds-sidebar__nav">
-              {currentConfig.items.map((item, idx) => {
-                const Icon = item.icon;
-                const isActive = pathname === item.path.split("?")[0] ||
-                  (item.path !== "/marketplace" && pathname.startsWith(item.path.split("?")[0]) && item.path.split("?")[0] !== `/dashboard/${activeRole}`);
-                const isExactDash = item.path === `/dashboard/${activeRole}` && pathname === `/dashboard/${activeRole}`;
-                return (
-                  <Link
-                    key={idx}
-                    href={item.path}
-                    className={`ds-sidebar__link ${isActive || isExactDash ? "ds-sidebar__link--active" : ""}`}
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    <Icon size={18} />
-                    <span>{t(item.labelKey)}</span>
-                  </Link>
-                );
-              })}
-            </nav>
+            <Suspense fallback={<SidebarNav items={currentConfig.items} activeRole={activeRole} pathname={pathname} tab={null} onNavigate={() => setSidebarOpen(false)} />}>
+              <SidebarNavWithTab items={currentConfig.items} activeRole={activeRole} pathname={pathname} onNavigate={() => setSidebarOpen(false)} />
+            </Suspense>
           </div>
 
           <div className="ds-sidebar__footer">
@@ -336,5 +320,52 @@ export default function DashboardShell({
         <main className={`ds-content ${mediaMode ? "ds-content--media" : ""}`}>{children}</main>
       </div>
     </div>
+  );
+}
+
+type SidebarNavProps = {
+  items: SidebarItem[];
+  activeRole: string;
+  pathname: string;
+  onNavigate: () => void;
+};
+
+// useSearchParams needs a Suspense boundary; this wrapper keeps the rest of the shell static.
+function SidebarNavWithTab(props: SidebarNavProps) {
+  const tab = useSearchParams().get("tab");
+  return <SidebarNav {...props} tab={tab} />;
+}
+
+function SidebarNav({ items, activeRole, pathname, tab, onNavigate }: SidebarNavProps & { tab: string | null }) {
+  const { t } = useLanguage();
+  const home = `/dashboard/${activeRole}`;
+
+  const isActive = (itemPath: string) => {
+    const [path, query] = itemPath.split("?");
+    const itemTab = new URLSearchParams(query ?? "").get("tab");
+    if (itemTab) return pathname === path && tab === itemTab;
+    if (path === home) return pathname === home && !tab;
+    return pathname === path || (path !== "/marketplace" && pathname.startsWith(`${path}/`));
+  };
+
+  return (
+    <nav className="ds-sidebar__nav">
+      {items.map((item) => {
+        const Icon = item.icon;
+        const active = isActive(item.path);
+        return (
+          <Link
+            key={item.path}
+            href={item.path}
+            className={`ds-sidebar__link ${active ? "ds-sidebar__link--active" : ""}`}
+            aria-current={active ? "page" : undefined}
+            onClick={onNavigate}
+          >
+            <Icon size={18} />
+            <span>{t(item.labelKey)}</span>
+          </Link>
+        );
+      })}
+    </nav>
   );
 }
