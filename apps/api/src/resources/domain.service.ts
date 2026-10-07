@@ -1018,6 +1018,74 @@ export class DomainService {
     return result;
   }
 
+  /**
+   * Every record of one farm (optionally one flock and a date range), grouped by type,
+   * for the farmer's PDF export. Capped per type to keep responses reasonable.
+   */
+  async exportFarmRecords(
+    user: AuthUser,
+    params: { farmId?: string; batchId?: string; from?: string; to?: string; types?: string }
+  ) {
+    if (!params.farmId) throw new BadRequestException("farmId is required");
+    const farm = await this.assertFarmAccess(user, params.farmId);
+    if (params.batchId) {
+      const batch = await this.assertBatchAccess(user, params.batchId, { allowInactive: true });
+      if (String(batch.farmId) !== String(farm._id)) throw new BadRequestException("This flock belongs to another farm");
+    }
+
+    const parseDate = (value: string | undefined, endOfDay: boolean) => {
+      if (!value) return undefined;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) throw new BadRequestException("Invalid date");
+      if (endOfDay) date.setHours(23, 59, 59, 999);
+      return date;
+    };
+    const from = parseDate(params.from, false);
+    const to = parseDate(params.to, true);
+    if (from && to && from > to) throw new BadRequestException("The start date is after the end date");
+
+    const requested = new Set(
+      (params.types || "feeding,mortality,vaccination,eggs,expenses,sales").split(",").map((t) => t.trim())
+    );
+    const range = (field: string) =>
+      from || to ? { [field]: { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) } } : {};
+    const scope = { farmId: farm._id, ...(params.batchId ? { batchId: new Types.ObjectId(params.batchId) } : {}) };
+    const LIMIT = 2000;
+    const fetch = (type: string, modelName: string, dateField: string, extra: Record<string, unknown> = scope) =>
+      requested.has(type)
+        ? this.model(modelName).find({ ...extra, ...range(dateField) }).sort({ [dateField]: 1 }).limit(LIMIT).lean()
+        : Promise.resolve([]);
+
+    const batchFilter = params.batchId ? { _id: params.batchId } : { farmId: farm._id };
+    const [batches, feeding, mortality, vaccination, eggs, expenses, sales] = await Promise.all([
+      this.model(schemaNames.PoultryBatch)
+        .find(batchFilter)
+        .select("name batchCode poultryType breed startDate initialQuantity currentQuantity status")
+        .sort({ startDate: 1 })
+        .lean(),
+      fetch("feeding", schemaNames.FeedingRecord, "feedingDate"),
+      fetch("mortality", schemaNames.MortalityRecord, "date"),
+      fetch("vaccination", schemaNames.VaccinationRecord, "scheduledDate"),
+      fetch("eggs", schemaNames.EggProductionRecord, "date"),
+      fetch("expenses", schemaNames.Expense, "date", {
+        ownerId: new Types.ObjectId(user.id),
+        farmId: farm._id,
+        ...(params.batchId ? { batchId: new Types.ObjectId(params.batchId) } : {})
+      }),
+      fetch("sales", schemaNames.FarmSale, "saleDate")
+    ]);
+
+    return {
+      data: {
+        farm: { _id: farm._id, name: farm.name, farmType: farm.farmType, location: farm.location, city: farm.city, region: farm.region },
+        period: { from: from ?? null, to: to ?? null },
+        generatedAt: new Date(),
+        batches,
+        records: { feeding, mortality, vaccination, eggs, expenses, sales }
+      }
+    };
+  }
+
   /** Headline production and finance figures across every farm the user owns. */
   async farmerOverview(user: AuthUser) {
     const farmIds = (

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
 import { MongooseModule } from "@nestjs/mongoose";
+import { KnowledgeModule } from "../knowledge/knowledge.module";
 import { schemaDefinitions } from "../database/schemas";
 import { AdminController } from "./admin.controller";
 import { MarketplaceController } from "./marketplace.controller";
@@ -15,7 +16,7 @@ import { CampayController } from "../payments/campay.controller";
 import { CampayService } from "../payments/campay.service";
 
 @Module({
-  imports: [JwtModule.register({}), MongooseModule.forFeature(schemaDefinitions)],
+  imports: [JwtModule.register({}), MongooseModule.forFeature(schemaDefinitions), KnowledgeModule],
   controllers: [
     ResourcesController, 
     SrsController, 

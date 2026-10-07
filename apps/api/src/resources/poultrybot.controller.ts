@@ -5,6 +5,7 @@ import { InjectConnection } from "@nestjs/mongoose";
 import type { Response } from "express";
 import { Connection } from "mongoose";
 import { getJwtSecret } from "../common/jwt-secrets";
+import { KnowledgeService } from "../knowledge/knowledge.service";
 import { schemaNames } from "../database/schema-names";
 
 interface ChatMessage {
@@ -20,13 +21,23 @@ interface VerifiedPayload {
 
 type AiEngine = "openrouter" | "nvidia_nim" | "gemini" | "openai";
 
-type ChatBody = { message: string; history?: ChatMessage[]; lang?: string };
+type ChatBody = { message: string; history?: ChatMessage[]; lang?: string; activeRole?: string };
+
+type Role = "farmer" | "shopkeeper" | "customer" | "admin" | "guest";
+
+/** Everything the system prompt needs: the account summary plus per-request guidance. */
+type PromptContext = {
+  account: any | null;
+  activeRole: Role;
+  knowledgeGuides: { title: string; slug: string; section: string }[];
+};
 
 type PreparedChat = {
   message: string;
   history: ChatMessage[];
   lang: string;
   userContext: any;
+  promptContext: PromptContext;
 };
 
 // A slow provider should hand over to the next engine instead of hanging the chat.
@@ -49,7 +60,8 @@ export class PoultryBotController {
   constructor(
     @InjectConnection() private readonly connection: Connection,
     private readonly jwtService: JwtService,
-    private readonly config: ConfigService
+    private readonly config: ConfigService,
+    private readonly knowledge: KnowledgeService
   ) {}
 
   @Post("chat")
@@ -154,11 +166,27 @@ export class PoultryBotController {
     // 1. Gather authenticated user context. Guests are allowed, invalid bearer tokens are not.
     const tokenPayload = await this.verifyOptionalToken(authHeader);
     const userContext = tokenPayload?.sub ? await this.buildUserContext(tokenPayload.sub) : null;
-    return { message, history, lang, userContext };
+    const activeRole = this.resolveActiveRole(userContext?.roles ?? [], body?.activeRole);
+    const knowledgeGuides = await this.knowledge.guideIndex(lang).catch(() => []);
+    return { message, history, lang, userContext, promptContext: { account: userContext, activeRole, knowledgeGuides } };
+  }
+
+  /** The role the user is working in right now (from the dashboard), if they really hold it. */
+  private resolveActiveRole(roles: string[], requested?: string): Role {
+    if (!roles.length) return "guest";
+    const isAdmin = roles.includes("admin") || roles.includes("super_admin");
+    if (requested === "admin" && isAdmin) return "admin";
+    if ((requested === "farmer" || requested === "shopkeeper" || requested === "customer") && roles.includes(requested)) {
+      return requested;
+    }
+    if (isAdmin) return "admin";
+    if (roles.includes("farmer")) return "farmer";
+    if (roles.includes("shopkeeper")) return "shopkeeper";
+    return "customer";
   }
 
   private async respond(
-    { message, history, lang, userContext }: PreparedChat,
+    { message, history, lang, userContext, promptContext }: PreparedChat,
     options: { skip?: AiEngine[] } = {}
   ) {
 
@@ -173,22 +201,22 @@ export class PoultryBotController {
       {
         name: "openrouter",
         key: openRouterKey,
-        call: (apiKey) => this.callOpenRouter(message, history, userContext, apiKey, lang)
+        call: (apiKey) => this.callOpenRouter(message, history, promptContext, apiKey, lang)
       },
       {
         name: "nvidia_nim",
         key: nvidiaNimKey,
-        call: (apiKey) => this.callNvidiaNim(message, history, userContext, apiKey, lang)
+        call: (apiKey) => this.callNvidiaNim(message, history, promptContext, apiKey, lang)
       },
       {
         name: "gemini",
         key: geminiKey,
-        call: (apiKey) => this.callGemini(message, history, userContext, apiKey, lang)
+        call: (apiKey) => this.callGemini(message, history, promptContext, apiKey, lang)
       },
       {
         name: "openai",
         key: openaiKey,
-        call: (apiKey) => this.callOpenAI(message, history, userContext, apiKey, lang)
+        call: (apiKey) => this.callOpenAI(message, history, promptContext, apiKey, lang)
       }
     ];
 
@@ -206,8 +234,21 @@ export class PoultryBotController {
     }
 
     // Fallback: Local rule engine
+    // Offline: health questions get cautious guidance and Knowledge Center links first.
+    const healthReply = await this.localHealthGuidance(message, lang);
+    if (healthReply) return { reply: healthReply, meta: { engine: "local", memoryTurns: history.length } };
     const reply = this.runLocalInference(message, userContext, lang, history);
     return { reply, meta: { engine: "local", memoryTurns: history.length } };
+  }
+
+  private async localHealthGuidance(message: string, lang: string) {
+    const matches = await this.knowledge.matchSymptoms(message, 4).catch(() => []);
+    if (!matches.length) return null;
+    const isEn = lang === "en";
+    const links = matches.map((a) => `- [${isEn ? a.title.en || a.title.fr : a.title.fr || a.title.en}](/knowledge/article/${a.slug})`).join("\n");
+    return isEn
+      ? `I cannot diagnose what is affecting your birds, but these Knowledge Center guides describe the signs you mention and what to check:\n\n${links}\n\n**What to do now:** isolate sick birds, write down how many are affected and since when, and contact a veterinarian. If many birds are sick or dying suddenly, see [When to call a veterinarian](/knowledge/article/when-to-seek-help).`
+      : `Je ne peux pas diagnostiquer ce qui touche vos oiseaux, mais ces fiches du centre de connaissances décrivent les signes que vous mentionnez et ce qu'il faut vérifier :\n\n${links}\n\n**À faire maintenant :** isolez les oiseaux malades, notez combien sont touchés et depuis quand, et contactez un vétérinaire. Si beaucoup d'oiseaux sont malades ou meurent subitement, voyez [Quand appeler un vétérinaire](/knowledge/article/when-to-seek-help).`;
   }
 
   private isAiEngineCoolingDown(engine: AiEngine): boolean {
@@ -303,7 +344,7 @@ export class PoultryBotController {
         const batches = await this.connection
           .model(schemaNames.PoultryBatch)
           .find({ farmId: { $in: farmIds }, status: "active" })
-          .select("name poultryType initialQuantity currentQuantity startDate expectedMaturityDate")
+          .select("name poultryType breed startingAgeDays initialQuantity currentQuantity startDate expectedMaturityDate")
           .lean();
 
         const batchIds = batches.map((b: any) => b._id);
@@ -335,6 +376,10 @@ export class PoultryBotController {
           batches: batches.slice(0, 8).map((b: any) => ({
             name: b.name,
             poultryType: b.poultryType,
+            breed: b.breed,
+            ageDays:
+              (Number(b.startingAgeDays) || 0) +
+              Math.max(0, Math.floor((Date.now() - new Date(b.startDate).getTime()) / (24 * 60 * 60 * 1000))),
             initialQuantity: Number(b.initialQuantity) || 0,
             currentQuantity: Number(b.currentQuantity) || 0,
             startDate: b.startDate,
@@ -448,7 +493,11 @@ export class PoultryBotController {
     apiKey: string,
     lang: string
   ): Promise<string> {
-    const response = await this.openRouterRequest({ message, history, lang, userContext: context }, apiKey, false);
+    const response = await this.openRouterRequest(
+      { message, history, lang, userContext: context.account, promptContext: context },
+      apiKey,
+      false
+    );
 
     if (!response.ok) {
       throw new AiProviderError("openrouter", response.status);
@@ -532,12 +581,45 @@ export class PoultryBotController {
       body: JSON.stringify({
         model,
         ...(fallbackModels.length ? { models: [model, ...fallbackModels] } : {}),
-        messages: this.buildChatMessages(chat.message, chat.history, chat.userContext, chat.lang),
+        messages: this.buildChatMessages(chat.message, chat.history, chat.promptContext, chat.lang),
         temperature: 0.25,
         max_tokens: 2200,
         stream
       })
     });
+  }
+
+  /** How to answer depending on the role the user is working in. */
+  private roleGuidance(role: Role) {
+    const guidance: Record<Role, string> = {
+      farmer: `
+ACTIVE ROLE: FARMER. Answer as a practical farm advisor.
+- Focus on flock management, feeding, housing, biosecurity, vaccination plans, records and profitability.
+- Use their flocks (type, breed, age in days, mortality, feeding) from the context to tailor advice.
+- Point to: [Farm Management](/dashboard/farmer/manage), [Daily Log](/dashboard/farmer/manage/daily), [My Products](/dashboard/farmer/products), [Reports](/dashboard/farmer/reports), [Records PDF](/dashboard/farmer/records), [Knowledge Center](/knowledge).
+`,
+      shopkeeper: `
+ACTIVE ROLE: SHOPKEEPER. Answer as a retail and supply advisor.
+- Focus on stock levels, pricing, product presentation, orders, customer service and safe storage of poultry products and supplies.
+- Point to: [My Shops](/dashboard/shopkeeper/shops), [Orders](/dashboard/shopkeeper/orders), [Reports](/dashboard/shopkeeper/reports), [Knowledge Center](/knowledge).
+`,
+      customer: `
+ACTIVE ROLE: BUYER. Answer as a helpful marketplace guide.
+- Focus on finding products, comparing offers, ordering, paying by mobile money, delivery or pickup, tracking orders, and storing/handling eggs and poultry safely.
+- Do not give farm-management detail unless asked; keep it simple.
+- Point to: [Marketplace](/marketplace), [Cart](/dashboard/customer/cart), [My Orders](/dashboard/customer/orders), [Messages](/dashboard/customer/messages).
+`,
+      admin: `
+ACTIVE ROLE: ADMINISTRATOR. Answer as a platform operations assistant.
+- Focus on approvals, user management, content quality, Knowledge Center editing and platform health. Explain how to do it in the admin dashboard.
+- Point to: [Admin dashboard](/dashboard/admin), [Pending approvals](/dashboard/admin?tab=approvals), [Knowledge Center editor](/dashboard/admin?tab=knowledge).
+`,
+      guest: `
+ACTIVE ROLE: GUEST (not logged in). Give general, educational answers only.
+- Invite them to [Register](/register) or [Login](/login) for personal insights, and to browse the [Marketplace](/marketplace) and [Knowledge Center](/knowledge).
+`
+    };
+    return guidance[role];
   }
 
   private buildChatMessages(message: string, history: ChatMessage[], context: any, lang: string) {
@@ -671,8 +753,9 @@ export class PoultryBotController {
   }
 
   // System Prompt Builder
-  private getSystemPrompt(context: any, lang: string): string {
+  private getSystemPrompt(promptContext: PromptContext, lang: string): string {
     const isEn = lang === "en";
+    const context = promptContext.account;
     let prompt = `You are PoultryBot, a highly professional, expert AI assistant embedded in the PoultryHub ecosystem.
 You are specialized exclusively in poultry farming, biosecurity, feed conversion ratio (FCR), vaccination plans, disease prevention (like Gumboro, Newcastle, Coccidiosis), egg production optimization, shop inventory management, and market pricing in Cameroon/Africa.
 Do not talk about non-poultry topics. If asked about unrelated things, politely steer back.
@@ -731,6 +814,22 @@ For example:
 
 User Status: ${context ? `Logged in as ${context.fullName} with roles: ${context.roles.join(", ")}` : "Guest (Not logged in)"}
 `;
+
+    prompt += this.roleGuidance(promptContext.activeRole);
+    prompt += `
+POULTRY HEALTH SAFETY (always applies):
+- Never diagnose a disease and never present a guess as certain. Describe what signs "may be associated with", list several possibilities, and say that only a veterinarian or a laboratory can confirm.
+- Never give medicine names with doses, or tell the user to start antibiotics. Explain responsible use (veterinary advice, full course, withdrawal periods) instead.
+- If the user describes many sick or dead birds, sudden deaths, swollen heads, blue combs, twisted necks or paralysis, tell them clearly to isolate the birds, stop movements and contact a veterinarian today. Suspected avian influenza must be reported to the official veterinary services (in Cameroon, MINEPIA).
+- When farm data is in the context (flock age, type, breed, recent mortality, feeding), use it to make advice specific (for example age-appropriate temperature or feed stage).
+`;
+
+    if (promptContext.knowledgeGuides.length) {
+      prompt += `
+POULTRY KNOWLEDGE CENTER: link the most relevant guide(s) with markdown links when they help. The search page is [Knowledge Center](/knowledge) and symptom searches can use /knowledge?q=<word>. Available guides:
+${promptContext.knowledgeGuides.map((g) => `- [${g.title}](/knowledge/article/${g.slug}) (${g.section})`).join("\n")}
+`;
+    }
 
     if (context) {
       prompt += `\nHere is the user's authorized, minimized real-time context. Reference only this data for account-specific answers:

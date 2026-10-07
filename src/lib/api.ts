@@ -97,5 +97,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload)
     });
+  },
+  remove<T>(path: string, token?: string | null) {
+    return apiFetch<ApiSingle<T>>(path, { token, method: "DELETE" });
   }
 };

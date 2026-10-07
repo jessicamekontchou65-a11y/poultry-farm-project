@@ -5,6 +5,7 @@ import {
 } from "@nestjs/common";
 import { InjectConnection } from "@nestjs/mongoose";
 import { Connection, Model, Types } from "mongoose";
+import { schemaNames } from "../database/schema-names";
 import { resourceMap } from "./resource-map";
 
 export interface ListQuery {
@@ -165,12 +166,68 @@ export class ResourcesService {
     action: "approve" | "reject" | "suspend",
     reason?: string
   ) {
+    if (!["farms", "shops", "products"].includes(resource)) {
+      throw new BadRequestException("Only farms, shops and products can be moderated");
+    }
+    if (!["approve", "reject", "suspend"].includes(action)) {
+      throw new BadRequestException("Unknown moderation action");
+    }
     const statusPatch =
       resource === "products"
         ? this.productModerationPatch(action, reason)
         : this.businessModerationPatch(action, reason);
 
-    return this.update(resource, id, statusPatch);
+    const result = await this.update(resource, id, statusPatch);
+    await this.notifyOwner(resource, action, result.data as Record<string, any>, reason);
+    return result;
+  }
+
+  /** Tells the farmer or shopkeeper what the admin decided about their farm, shop or product. */
+  private async notifyOwner(
+    resource: "farms" | "shops" | "products",
+    action: "approve" | "reject" | "suspend",
+    record: Record<string, any>,
+    reason?: string
+  ) {
+    if (!record?.ownerId) return;
+    const name = String(record.name ?? "");
+    const kind = {
+      farms: { en: "farm", fr: "ferme" },
+      shops: { en: "shop", fr: "boutique" },
+      products: { en: "product", fr: "produit" }
+    }[resource];
+    const link = { farms: "/dashboard/farmer/farms", shops: "/dashboard/shopkeeper/shops", products: "/dashboard/farmer/products" }[resource];
+    const reasonEn = reason ? ` Reason: ${reason}` : "";
+    const reasonFr = reason ? ` Motif : ${reason}` : "";
+    const fem = resource !== "products"; // ferme, boutique
+
+    const messages = {
+      approve: {
+        en: { title: `Your ${kind.en} is approved`, body: `“${name}” is now approved and visible to customers.` },
+        fr: { title: `Votre ${kind.fr} est approuvé${fem ? "e" : ""}`, body: `« ${name} » est maintenant approuvé${fem ? "e" : ""} et visible par les clients.` }
+      },
+      reject: {
+        en: { title: `Your ${kind.en} was not approved`, body: `“${name}” was not approved.${reasonEn} You can update it and submit again.` },
+        fr: { title: `Votre ${kind.fr} n'a pas été approuvé${fem ? "e" : ""}`, body: `« ${name} » n'a pas été approuvé${fem ? "e" : ""}.${reasonFr} Vous pouvez ${fem ? "la" : "le"} modifier et ${fem ? "la" : "le"} soumettre à nouveau.` }
+      },
+      suspend: {
+        en: { title: `Your ${kind.en} was suspended`, body: `“${name}” has been suspended by an administrator.${reasonEn}` },
+        fr: { title: `Votre ${kind.fr} a été suspendu${fem ? "e" : ""}`, body: `« ${name} » a été suspendu${fem ? "e" : ""} par un administrateur.${reasonFr}` }
+      }
+    }[action];
+
+    try {
+      await this.connection.model(schemaNames.Notification).create({
+        userId: record.ownerId,
+        type: `moderation_${action}`,
+        title: messages.en.title,
+        body: messages.en.body,
+        data: { resource, id: String(record._id), action, reason, link, i18n: messages }
+      });
+    } catch (err) {
+      // The decision is already saved; a failed notification must not undo it.
+      console.warn("Could not create moderation notification:", err);
+    }
   }
 
   private getModel(resource: string): Model<any> {

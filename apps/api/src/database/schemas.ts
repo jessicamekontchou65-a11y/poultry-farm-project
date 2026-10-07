@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
+import { KNOWLEDGE_SECTIONS } from "../knowledge/knowledge.constants";
 import { Schema as MongooseSchema, Types } from "mongoose";
 import { schemaNames } from "./schema-names";
 
@@ -1045,6 +1046,95 @@ export class PostFollow {
 export const PostFollowSchema = SchemaFactory.createForClass(PostFollow);
 PostFollowSchema.index({ followerId: 1, followingId: 1 }, { unique: true });
 
+
+@Schema({ _id: false })
+export class LocalizedText {
+  @Prop({ default: "" })
+  en: string;
+
+  @Prop({ default: "" })
+  fr: string;
+}
+const LocalizedTextSchema = SchemaFactory.createForClass(LocalizedText);
+
+@Schema({ _id: false })
+export class KnowledgeReference {
+  @Prop({ required: true })
+  title: string;
+
+  @Prop()
+  url?: string;
+}
+const KnowledgeReferenceSchema = SchemaFactory.createForClass(KnowledgeReference);
+
+/** Educational content for the Poultry Knowledge Center, editable by admins. */
+@Schema({ timestamps: true })
+export class KnowledgeArticle {
+  @Prop({ required: true, unique: true, trim: true, lowercase: true, index: true })
+  slug: string;
+
+  @Prop({ required: true, enum: KNOWLEDGE_SECTIONS, index: true })
+  section: string;
+
+  @Prop({ type: LocalizedTextSchema, required: true })
+  title: LocalizedText;
+
+  @Prop({ type: LocalizedTextSchema, required: true })
+  summary: LocalizedText;
+
+  /** Markdown body. */
+  @Prop({ type: LocalizedTextSchema, required: true })
+  body: LocalizedText;
+
+  /** Observable signs people search for, in both languages (e.g. "coughing", "toux"). */
+  @Prop({ type: [String], default: [] })
+  symptoms: string[];
+
+  @Prop({ type: [String], default: [] })
+  tags: string[];
+
+  /** Empty means the article applies to every poultry type. */
+  @Prop({ type: [String], default: [] })
+  poultryTypes: string[];
+
+  @Prop({ min: 0 })
+  minAgeDays?: number;
+
+  @Prop({ min: 0 })
+  maxAgeDays?: number;
+
+  @Prop({ enum: ["info", "caution", "urgent"], default: "info", index: true })
+  alertLevel: string;
+
+  @Prop({ type: [LocalizedTextSchema], default: [] })
+  warnings: LocalizedText[];
+
+  @Prop({ type: [LocalizedTextSchema], default: [] })
+  checklist: LocalizedText[];
+
+  @Prop({ type: [KnowledgeReferenceSchema], default: [] })
+  references: KnowledgeReference[];
+
+  @Prop({ type: [String], default: [] })
+  images: string[];
+
+  @Prop({ enum: ["draft", "published"], default: "published", index: true })
+  status: string;
+
+  @Prop({ default: 0 })
+  order: number;
+
+  /** Lower-cased, accent-free copy of the searchable text, maintained by the service. */
+  @Prop({ select: false, index: true })
+  searchText?: string;
+
+  @Prop({ ...optionalObjectId, ref: schemaNames.User })
+  updatedBy?: Types.ObjectId;
+}
+
+export const KnowledgeArticleSchema = SchemaFactory.createForClass(KnowledgeArticle);
+KnowledgeArticleSchema.index({ section: 1, status: 1, order: 1 });
+
 export const schemaDefinitions = [
   { name: schemaNames.User, schema: UserSchema },
   { name: schemaNames.Farm, schema: FarmSchema },
@@ -1070,5 +1160,6 @@ export const schemaDefinitions = [
   { name: schemaNames.SystemSetting, schema: SystemSettingSchema },
   { name: schemaNames.Post, schema: PostSchema },
   { name: schemaNames.Comment, schema: CommentSchema },
-  { name: schemaNames.PostFollow, schema: PostFollowSchema }
+  { name: schemaNames.PostFollow, schema: PostFollowSchema },
+  { name: schemaNames.KnowledgeArticle, schema: KnowledgeArticleSchema }
 ];

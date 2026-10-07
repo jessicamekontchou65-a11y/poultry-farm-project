@@ -23,7 +23,8 @@ export const schemaNames = {
   SystemSetting: "SystemSetting",
   Post: "Post",
   Comment: "Comment",
-  PostFollow: "PostFollow"
+  PostFollow: "PostFollow",
+  KnowledgeArticle: "KnowledgeArticle"
 } as const;
 
 export type SchemaName = (typeof schemaNames)[keyof typeof schemaNames];

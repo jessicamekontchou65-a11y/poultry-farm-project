@@ -21,6 +21,15 @@ import { AuthUser, DomainService } from "./domain.service";
 export class FarmOpsController {
   constructor(private readonly domain: DomainService) {}
 
+  /** All records of a farm for the PDF export (farm owner or admin only). */
+  @Get("records-export")
+  recordsExport(
+    @CurrentUser() user: AuthUser,
+    @Query() query: { farmId?: string; batchId?: string; from?: string; to?: string; types?: string }
+  ) {
+    return this.domain.exportFarmRecords(user, query);
+  }
+
   /** Owned farms with nested flocks for hub selectors */
   @Get("context")
   context(@CurrentUser() user: AuthUser) {

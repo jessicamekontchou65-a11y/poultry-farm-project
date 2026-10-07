@@ -17,7 +17,6 @@ type OrderPayment = {
   state: "waiting" | "paid" | "failed" | "submitted" | "error";
   paymentId?: string;
   ussdCode?: string;
-  chargedAmount?: number;
   message?: string;
 };
 
@@ -158,8 +157,7 @@ export default function CheckoutPage() {
         setOrderPayment(orderId, {
           state: "waiting",
           paymentId: res.data._id,
-          ussdCode: res.data.providerResponse?.ussdCode,
-          chargedAmount: res.data.providerResponse?.chargedAmount
+          ussdCode: res.data.providerResponse?.ussdCode
         });
         pollPayment(orderId, res.data._id, Date.now());
         return;
@@ -246,14 +244,6 @@ export default function CheckoutPage() {
                     {lang === "en"
                       ? "Confirm the payment on your phone (enter your mobile money PIN). Waiting for confirmation…"
                       : "Confirmez le paiement sur votre téléphone (saisissez votre code mobile money). En attente de confirmation…"}
-                    {payments[order._id].chargedAmount !== undefined &&
-                      payments[order._id].chargedAmount! < (order.totalAmount ?? 0) && (
-                      <div style={{ marginTop: 6 }}>
-                        {lang === "en"
-                          ? `Demo mode: only ${payments[order._id].chargedAmount} XAF will be debited.`
-                          : `Mode démo : seuls ${payments[order._id].chargedAmount} XAF seront débités.`}
-                      </div>
-                    )}
                     {payments[order._id].ussdCode && (
                       <div style={{ marginTop: 6 }}>
                         {lang === "en" ? "No prompt? Dial " : "Pas de notification ? Composez "}

@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import type { DashboardOverview, Farm, Product, Shop } from "@/lib/types";
 import { useAuth } from "../../AuthContext";
 import { useLanguage } from "../../LanguageContext";
+import AdminKnowledgeManager from "./AdminKnowledgeManager";
 import DashboardShell from "../../components/DashboardShell";
 import {
   Layers,
@@ -22,7 +23,7 @@ import {
   ChevronUp,
 } from "lucide-react";
 
-type AdminTab = "overview" | "approvals" | "categories" | "users" | "orders" | "audit";
+type AdminTab = "overview" | "approvals" | "categories" | "users" | "orders" | "knowledge" | "audit";
 
 function getGreeting(lang: string): string {
   const h = new Date().getHours();
@@ -40,7 +41,7 @@ export default function AdminDashboard() {
 
   // Sync tab state when sidebar navigation changes the URL query param
   useEffect(() => {
-    if (tabParam && ["overview", "approvals", "categories", "users", "orders", "audit"].includes(tabParam)) {
+    if (tabParam && ["overview", "approvals", "categories", "users", "orders", "knowledge", "audit"].includes(tabParam)) {
       setActiveTab(tabParam);
     }
   }, [tabParam]);
@@ -234,6 +235,7 @@ export default function AdminDashboard() {
         <button onClick={() => setActiveTab("categories")} className={`tab-btn ${activeTab === "categories" ? "active" : ""}`}>{t("admin.tab.categories")}</button>
         <button onClick={() => setActiveTab("users")} className={`tab-btn ${activeTab === "users" ? "active" : ""}`}>{t("admin.tab.users")}</button>
         <button onClick={() => setActiveTab("orders")} className={`tab-btn ${activeTab === "orders" ? "active" : ""}`}>{lang === "en" ? "Orders Database" : "Base Commandes"}</button>
+        <button onClick={() => setActiveTab("knowledge")} className={`tab-btn ${activeTab === "knowledge" ? "active" : ""}`}>{t("admin.tab.knowledge")}</button>
         <button onClick={() => setActiveTab("audit")} className={`tab-btn ${activeTab === "audit" ? "active" : ""}`}>{t("admin.tab.audit")}</button>
       </div>
 
@@ -770,6 +772,8 @@ export default function AdminDashboard() {
           )}
 
           {/* ── Audit Tab ── */}
+          {activeTab === "knowledge" && <AdminKnowledgeManager token={token} lang={lang} />}
+
           {activeTab === "audit" && (
             <div className="dash-section">
               <div className="dash-section__header">

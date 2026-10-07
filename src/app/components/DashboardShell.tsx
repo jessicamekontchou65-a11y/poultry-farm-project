@@ -7,6 +7,8 @@ import { useAuth } from "../AuthContext";
 import { useLanguage } from "../LanguageContext";
 import ThemeToggle from "../ThemeToggle";
 import {
+  BookOpen,
+  FileDown,
   Tractor,
   Store,
   ShoppingBag,
@@ -110,6 +112,7 @@ export default function DashboardShell({
         { labelKey: "orders.title", path: "/dashboard/customer/orders", icon: Package },
         { labelKey: "msg.chat_title", path: "/dashboard/customer/messages", icon: MessageSquare },
         { labelKey: "auth.profile.title", path: "/dashboard/customer/profile", icon: User },
+        { labelKey: "nav.knowledge", path: "/knowledge", icon: BookOpen },
         { labelKey: "nav.platform", path: "/platform", icon: Globe },
       ],
     },
@@ -120,9 +123,12 @@ export default function DashboardShell({
         { labelKey: "farm.manage.title", path: "/dashboard/farmer/manage", icon: Layers },
         { labelKey: "farm.manage.daily", path: "/dashboard/farmer/manage/daily", icon: ClipboardList },
         { labelKey: "farm.create.title", path: "/dashboard/farmer/farms", icon: Tractor },
-        { labelKey: "op.expense.cat", path: "/dashboard/farmer/expenses", icon: DollarSign },
-        { labelKey: "op.sale.type", path: "/dashboard/farmer/sales", icon: FileText },
-        { labelKey: "platform.card3_title", path: "/dashboard/farmer/reports", icon: Egg },
+        { labelKey: "dash.sidebar.products", path: "/dashboard/farmer/products", icon: ShoppingBag },
+        { labelKey: "dash.sidebar.expenses", path: "/dashboard/farmer/expenses", icon: DollarSign },
+        { labelKey: "dash.sidebar.sales", path: "/dashboard/farmer/sales", icon: FileText },
+        { labelKey: "dash.sidebar.farm_reports", path: "/dashboard/farmer/reports", icon: Egg },
+        { labelKey: "dash.sidebar.records_pdf", path: "/dashboard/farmer/records", icon: FileDown },
+        { labelKey: "nav.knowledge", path: "/knowledge", icon: BookOpen },
         { labelKey: "nav.platform", path: "/platform", icon: Globe },
       ],
     },
@@ -133,6 +139,7 @@ export default function DashboardShell({
         { labelKey: "shop.create.title", path: "/dashboard/shopkeeper/shops", icon: Store },
         { labelKey: "cart.checkout", path: "/dashboard/shopkeeper/orders", icon: ShoppingBag },
         { labelKey: "dash.sidebar.reports", path: "/dashboard/shopkeeper/reports", icon: FileText },
+        { labelKey: "nav.knowledge", path: "/knowledge", icon: BookOpen },
         { labelKey: "nav.platform", path: "/platform", icon: Globe },
       ],
     },
@@ -143,6 +150,7 @@ export default function DashboardShell({
         { labelKey: "admin.tab.approvals", path: "/dashboard/admin?tab=approvals", icon: Tractor },
         { labelKey: "admin.tab.categories", path: "/dashboard/admin?tab=categories", icon: Layers },
         { labelKey: "admin.tab.users", path: "/dashboard/admin?tab=users", icon: Users },
+        { labelKey: "admin.tab.knowledge", path: "/dashboard/admin?tab=knowledge", icon: BookOpen },
         { labelKey: "admin.tab.audit", path: "/dashboard/admin?tab=audit", icon: Settings },
         { labelKey: "nav.platform", path: "/platform", icon: Globe },
       ],
@@ -153,9 +161,10 @@ export default function DashboardShell({
   const unreadCount = notifications.filter((n) => !n.readAt).length;
 
   // Breadcrumb
-  const breadcrumbLabel = currentConfig.items.find(
-    (item) => pathname.startsWith(item.path.split("?")[0]) && item.path !== "/marketplace"
-  )?.labelKey;
+  // Most specific matching menu entry, so /dashboard/farmer/records shows "Records", not the dashboard.
+  const breadcrumbLabel = currentConfig.items
+    .filter((item) => pathname.startsWith(item.path.split("?")[0]) && item.path !== "/marketplace")
+    .sort((a, b) => b.path.split("?")[0].length - a.path.split("?")[0].length)[0]?.labelKey;
 
   const handleRoleSwitch = (nextRole: string) => {
     setActiveRole(nextRole);
@@ -249,12 +258,33 @@ export default function DashboardShell({
                       {lang === "en" ? "No notifications yet" : "Aucune notification"}
                     </p>
                   ) : (
-                    notifications.map((notif) => (
-                      <div key={notif._id} className={`notif-item ${!notif.readAt ? "unread" : ""}`}>
-                        <h4>{notif.title}</h4>
-                        <p>{notif.body}</p>
-                      </div>
-                    ))
+                    notifications.map((notif) => {
+                      // Moderation notices carry both languages; older ones only have title/body.
+                      const text = notif.data?.i18n?.[lang] ?? { title: notif.title, body: notif.body };
+                      const open = async () => {
+                        setShowNotifications(false);
+                        if (!notif.readAt && token) {
+                          setNotifications((prev) =>
+                            prev.map((n) => (n._id === notif._id ? { ...n, readAt: new Date().toISOString() } : n))
+                          );
+                          api.update(`/notifications/${notif._id}/read`, {}, token).catch(() => {});
+                        }
+                        if (typeof notif.data?.link === "string" && notif.data.link.startsWith("/")) {
+                          router.push(notif.data.link);
+                        }
+                      };
+                      return (
+                        <button
+                          type="button"
+                          key={notif._id}
+                          className={`notif-item ${!notif.readAt ? "unread" : ""}`}
+                          onClick={open}
+                        >
+                          <h4>{text.title}</h4>
+                          <p>{text.body}</p>
+                        </button>
+                      );
+                    })
                   )}
                 </div>
               </div>
