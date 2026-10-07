@@ -11,6 +11,8 @@ import { DomainService } from "./domain.service";
 import { PoultryBotController } from "./poultrybot.controller";
 import { PlatformController } from "./platform.controller";
 import { FarmOpsController } from "./farm-ops.controller";
+import { CampayController } from "../payments/campay.controller";
+import { CampayService } from "../payments/campay.service";
 
 @Module({
   imports: [JwtModule.register({}), MongooseModule.forFeature(schemaDefinitions)],
@@ -21,9 +23,10 @@ import { FarmOpsController } from "./farm-ops.controller";
     AdminController,
     PoultryBotController,
     PlatformController,
-    FarmOpsController
+    FarmOpsController,
+    CampayController
   ],
-  providers: [ResourcesService, DomainService],
+  providers: [ResourcesService, DomainService, CampayService],
   exports: [ResourcesService]
 })
 export class ResourcesModule {}

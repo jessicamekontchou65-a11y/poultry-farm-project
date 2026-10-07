@@ -7,6 +7,7 @@ import {
 import { InjectConnection } from "@nestjs/mongoose";
 import { Connection, Types } from "mongoose";
 import { schemaNames } from "../database/schema-names";
+import { CampayService, CampayStatus } from "../payments/campay.service";
 import {
   applyMortality,
   calculateEggProduction,
@@ -28,6 +29,13 @@ const ORDER_STATUSES = new Set([
   "rejected"
 ]);
 const PAYMENT_STATUSES = new Set(["pending", "paid", "failed", "refunded"]);
+const CAMPAY_METHODS = new Set(["mtn_mobile_money", "orange_money", "mobile_money"]);
+
+function campayToPaymentStatus(status: CampayStatus) {
+  if (status === "SUCCESSFUL") return "paid";
+  if (status === "FAILED") return "failed";
+  return "pending";
+}
 
 const CAMEROON_REGION_COORDINATES: Record<string, { latitude: number; longitude: number }> = {
   adamawa: { latitude: 7.32, longitude: 13.58 },
@@ -44,7 +52,10 @@ const CAMEROON_REGION_COORDINATES: Record<string, { latitude: number; longitude:
 
 @Injectable()
 export class DomainService {
-  constructor(@InjectConnection() private readonly connection: Connection) {}
+  constructor(
+    @InjectConnection() private readonly connection: Connection,
+    private readonly campay: CampayService
+  ) {}
 
   async createBatch(user: AuthUser, farmId: string, body: Record<string, any>) {
     await this.assertFarmAccess(user, farmId);
@@ -1018,17 +1029,108 @@ export class DomainService {
       throw new BadRequestException("Invalid payment status");
     }
     const payment = await this.findById(schemaNames.Payment, String(body.paymentId));
-    payment.status = body.status;
     payment.transactionReference = body.transactionReference ?? payment.transactionReference;
-    payment.providerResponse = body.providerResponse ?? body;
-    if (body.status === "paid") payment.paidAt = new Date();
+    return { data: await this.applyPaymentStatus(payment, body.status, body.providerResponse ?? body) };
+  }
+
+  /** Starts a CamPay mobile money collection: the customer confirms on their phone. */
+  async initiateCampayPayment(user: AuthUser, body: Record<string, any>) {
+    if (!this.campay.isConfigured()) {
+      throw new BadRequestException("Mobile money payments are not configured");
+    }
+    const order = await this.getOrderForUser(user, String(body.orderId));
+    if (String(order.customerId) !== user.id) {
+      throw new ForbiddenException("You cannot pay for this order");
+    }
+    if (order.paymentStatus === "paid") {
+      throw new BadRequestException("This order is already paid");
+    }
+    const paymentMethod = CAMPAY_METHODS.has(body.paymentMethod) ? body.paymentMethod : "mobile_money";
+    const phone = this.campay.normalizePhone(body.phone);
+
+    const payment = await this.model(schemaNames.Payment).create({
+      orderId: order._id,
+      userId: user.id,
+      amount: Number(order.totalAmount),
+      currency: "XAF",
+      paymentMethod,
+      provider: "campay",
+      status: "pending"
+    });
+
+    try {
+      const collect = await this.campay.collect({
+        amount: Number(order.totalAmount),
+        phone,
+        description: `PoultryHub order ${order.orderNumber}`,
+        externalReference: String(payment._id)
+      });
+      payment.transactionReference = collect.reference;
+      payment.providerResponse = {
+        operator: collect.operator,
+        ussdCode: collect.ussdCode,
+        chargedAmount: collect.chargedAmount,
+        simulated: collect.simulated
+      };
+      await payment.save();
+    } catch (err) {
+      payment.status = "failed";
+      await payment.save();
+      throw err;
+    }
+
+    order.paymentStatus = "pending";
+    await order.save();
+    return { data: payment };
+  }
+
+  /** Asks CamPay for the latest state of a payment (used while the customer waits). */
+  async refreshCampayPayment(user: AuthUser, paymentId: string) {
+    const payment = await this.findById(schemaNames.Payment, paymentId);
+    if (String(payment.userId) !== user.id && !this.isAdmin(user)) {
+      throw new ForbiddenException("You cannot access this payment");
+    }
+    if (payment.provider !== "campay" || !payment.transactionReference) {
+      throw new BadRequestException("Not a mobile money payment");
+    }
+    if (payment.status !== "pending") {
+      return { data: payment };
+    }
+    const transaction = await this.campay.getTransaction(payment.transactionReference);
+    const { payment: updated } = await this.applyPaymentStatus(payment, campayToPaymentStatus(transaction.status), transaction);
+    return { data: updated };
+  }
+
+  /** CamPay webhook: trusted only with a valid signature, then re-checked against the API. */
+  async handleCampayWebhook(params: Record<string, any>) {
+    if (!this.campay.verifyWebhookSignature(params.signature)) {
+      throw new ForbiddenException("Invalid webhook signature");
+    }
+    const reference = String(params.reference ?? "");
+    const payment = await this.model(schemaNames.Payment).findOne({ provider: "campay", transactionReference: reference });
+    if (!payment) throw new NotFoundException("Payment not found");
+    if (payment.status !== "pending") return { data: { status: payment.status } };
+
+    const transaction = await this.campay.getTransaction(reference);
+    await this.applyPaymentStatus(payment, campayToPaymentStatus(transaction.status), transaction);
+    return { data: { status: payment.status } };
+  }
+
+  private async applyPaymentStatus(payment: any, status: string, providerResponse: unknown) {
+    // A settled payment is never moved back by a late or replayed notification.
+    if (payment.status === "paid" && status !== "refunded") {
+      const order = await this.findById(schemaNames.Order, String(payment.orderId));
+      return { payment, order };
+    }
+    payment.status = status;
+    payment.providerResponse = { ...(payment.providerResponse ?? {}), last: providerResponse };
+    if (status === "paid") payment.paidAt = new Date();
     await payment.save();
 
     const order = await this.findById(schemaNames.Order, String(payment.orderId));
-    order.paymentStatus = body.status === "paid" ? "paid" : body.status === "failed" ? "failed" : "pending";
+    order.paymentStatus = status === "pending" ? "pending" : status;
     await order.save();
-
-    return { data: { payment, order } };
+    return { payment, order };
   }
 
   async createConversation(user: AuthUser, body: Record<string, any>) {

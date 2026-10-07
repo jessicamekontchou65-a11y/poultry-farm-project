@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "../../../AuthContext";
 import { useLanguage } from "../../../LanguageContext";
@@ -9,6 +9,16 @@ import Link from "next/link";
 import { CheckCircle, CreditCard, MapPin, Package, Truck } from "lucide-react";
 
 const DELIVERY_FEE = 1000;
+const MOBILE_MONEY_METHODS = ["mtn_mobile_money", "orange_money"];
+const POLL_INTERVAL_MS = 5000;
+const POLL_TIMEOUT_MS = 3 * 60 * 1000;
+
+type OrderPayment = {
+  state: "waiting" | "paid" | "failed" | "submitted" | "error";
+  paymentId?: string;
+  ussdCode?: string;
+  message?: string;
+};
 
 export default function CheckoutPage() {
   const { token, user } = useAuth();
@@ -24,7 +34,19 @@ export default function CheckoutPage() {
   const [error, setError] = useState("");
 
   const [createdOrders, setCreatedOrders] = useState<any[] | null>(null);
-  const [paymentInitiated, setPaymentInitiated] = useState(false);
+  const [payerPhone, setPayerPhone] = useState("");
+  const [payments, setPayments] = useState<Record<string, OrderPayment>>({});
+  const pollTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const isMobileMoney = MOBILE_MONEY_METHODS.includes(paymentMethod);
+
+  useEffect(() => {
+    if (user?.phone) setPayerPhone((current) => current || user.phone || "");
+  }, [user]);
+
+  useEffect(() => () => pollTimers.current.forEach(clearTimeout), []);
+
+  const setOrderPayment = (orderId: string, next: OrderPayment) =>
+    setPayments((prev) => ({ ...prev, [orderId]: next }));
 
   useEffect(() => {
     if (!token) return;
@@ -88,19 +110,67 @@ export default function CheckoutPage() {
     }
   };
 
+  const pollPayment = (orderId: string, paymentId: string, startedAt: number) => {
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.get<any>(`/payments/campay/status/${paymentId}`, token);
+        if (res.data.status === "paid") {
+          setOrderPayment(orderId, { state: "paid", paymentId });
+          return;
+        }
+        if (res.data.status === "failed") {
+          setOrderPayment(orderId, {
+            state: "failed",
+            paymentId,
+            message: lang === "en" ? "Payment was declined or cancelled." : "Paiement refusé ou annulé."
+          });
+          return;
+        }
+      } catch {
+        // Transient error: keep polling until the timeout.
+      }
+      if (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+        pollPayment(orderId, paymentId, startedAt);
+      } else {
+        setOrderPayment(orderId, {
+          state: "failed",
+          paymentId,
+          message:
+            lang === "en"
+              ? "No confirmation received. You can try again."
+              : "Aucune confirmation reçue. Vous pouvez réessayer."
+        });
+      }
+    }, POLL_INTERVAL_MS);
+    pollTimers.current.push(timer);
+  };
+
   const handlePay = async (orderId: string) => {
     if (!token) return;
     try {
-      await api.create(
-        "/payments/initiate",
-        {
-          orderId,
-          paymentMethod
-        },
-        token
-      );
-      setPaymentInitiated(true);
-    } catch (err) {}
+      if (isMobileMoney) {
+        const res = await api.create<any>(
+          "/payments/campay/initiate",
+          { orderId, paymentMethod, phone: payerPhone },
+          token
+        );
+        setOrderPayment(orderId, {
+          state: "waiting",
+          paymentId: res.data._id,
+          ussdCode: res.data.providerResponse?.ussdCode
+        });
+        pollPayment(orderId, res.data._id, Date.now());
+        return;
+      }
+
+      await api.create("/payments/initiate", { orderId, paymentMethod }, token);
+      setOrderPayment(orderId, { state: "submitted" });
+    } catch (err) {
+      setOrderPayment(orderId, {
+        state: "error",
+        message: err instanceof Error ? err.message : lang === "en" ? "Payment failed" : "Échec du paiement"
+      });
+    }
   };
 
   if (createdOrders) {
@@ -137,7 +207,21 @@ export default function CheckoutPage() {
                   Status: <span className="status-badge pending">{order.orderStatus}</span>
                 </p>
 
-                {order.paymentStatus === "unpaid" && !paymentInitiated && (
+                {isMobileMoney && order.paymentStatus === "unpaid" && !payments[order._id] && (
+                  <div className="form-group" style={{ marginTop: 16 }}>
+                    <label>{lang === "en" ? "Mobile money number" : "Numéro mobile money"}</label>
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      value={payerPhone}
+                      onChange={(e) => setPayerPhone(e.target.value)}
+                      placeholder="6XXXXXXXX"
+                    />
+                  </div>
+                )}
+
+                {order.paymentStatus === "unpaid" &&
+                  (!payments[order._id] || ["failed", "error"].includes(payments[order._id].state)) && (
                   <button
                     onClick={() => handlePay(order._id)}
                     className="auth-submit-btn"
@@ -155,12 +239,38 @@ export default function CheckoutPage() {
                   </button>
                 )}
 
-                {paymentInitiated && (
+                {payments[order._id]?.state === "waiting" && (
                   <div className="form-success-banner" style={{ marginTop: "12px" }}>
                     {lang === "en"
-                      ? "Payment request simulated! Seller will verify."
-                      : "Demande de paiement simulée ! Le vendeur vérifiera."}
+                      ? "Confirm the payment on your phone (enter your mobile money PIN). Waiting for confirmation…"
+                      : "Confirmez le paiement sur votre téléphone (saisissez votre code mobile money). En attente de confirmation…"}
+                    {payments[order._id].ussdCode && (
+                      <div style={{ marginTop: 6 }}>
+                        {lang === "en" ? "No prompt? Dial " : "Pas de notification ? Composez "}
+                        <strong>{payments[order._id].ussdCode}</strong>
+                      </div>
+                    )}
                   </div>
+                )}
+
+                {payments[order._id]?.state === "paid" && (
+                  <div className="form-success-banner" style={{ marginTop: "12px" }}>
+                    {lang === "en" ? "Payment received. Thank you!" : "Paiement reçu. Merci !"}
+                  </div>
+                )}
+
+                {payments[order._id]?.state === "submitted" && (
+                  <div className="form-success-banner" style={{ marginTop: "12px" }}>
+                    {lang === "en"
+                      ? "Payment method recorded. The seller will confirm."
+                      : "Mode de paiement enregistré. Le vendeur confirmera."}
+                  </div>
+                )}
+
+                {["failed", "error"].includes(payments[order._id]?.state ?? "") && (
+                  <p className="form-error-banner" style={{ marginTop: "12px" }}>
+                    {payments[order._id].message}
+                  </p>
                 )}
               </div>
             ))}

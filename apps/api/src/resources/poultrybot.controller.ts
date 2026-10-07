@@ -17,7 +17,7 @@ interface VerifiedPayload {
   roles?: string[];
 }
 
-type AiEngine = "nvidia_nim" | "gemini" | "openai";
+type AiEngine = "openrouter" | "nvidia_nim" | "gemini" | "openai";
 
 class AiProviderError extends Error {
   constructor(
@@ -66,8 +66,14 @@ export class PoultryBotController {
       this.config.get<string>("NVIDIA_NIM_API_KEY") || this.config.get<string>("NVIDIA_API_KEY");
     const openaiKey = this.config.get<string>("OPENAI_API_KEY");
     const geminiKey = this.config.get<string>("GEMINI_API_KEY");
+    const openRouterKey = this.config.get<string>("OPENROUTER_API_KEY");
 
     const engines: Array<{ name: AiEngine; key?: string; call: (apiKey: string) => Promise<string> }> = [
+      {
+        name: "openrouter",
+        key: openRouterKey,
+        call: (apiKey) => this.callOpenRouter(message, history, userContext, apiKey, lang)
+      },
       {
         name: "nvidia_nim",
         key: nvidiaNimKey,
@@ -333,6 +339,63 @@ export class PoultryBotController {
     }
   }
 
+  // OpenRouter Integration (OpenAI-compatible API in front of many models)
+  private async callOpenRouter(
+    message: string,
+    history: ChatMessage[],
+    context: any,
+    apiKey: string,
+    lang: string
+  ): Promise<string> {
+    const baseUrl = this.config.get<string>("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1");
+    const model = this.config.get<string>("OPENROUTER_MODEL", "openai/gpt-4o-mini");
+    // Optional fallbacks OpenRouter tries in order if the primary model is down.
+    const fallbackModels = (this.config.get<string>("OPENROUTER_FALLBACK_MODELS") ?? "")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean);
+
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        // Attribution headers recommended by OpenRouter.
+        "HTTP-Referer": this.config.get<string>("APP_URL", "http://localhost:3000").split(",")[0].trim(),
+        "X-Title": "PoultryHub"
+      },
+      body: JSON.stringify({
+        model,
+        ...(fallbackModels.length ? { models: [model, ...fallbackModels] } : {}),
+        messages: this.buildChatMessages(message, history, context, lang),
+        temperature: 0.25,
+        max_tokens: 2200
+      })
+    });
+
+    if (!response.ok) {
+      throw new AiProviderError("openrouter", response.status);
+    }
+
+    const data = await response.json();
+    const choice = data.choices?.[0];
+    const text = choice?.message?.content || "I'm having trouble connecting right now.";
+    return choice?.finish_reason === "length"
+      ? `${text}\n\nI reached the response limit. Send “continue” and I will carry on from here.`
+      : text;
+  }
+
+  private buildChatMessages(message: string, history: ChatMessage[], context: any, lang: string) {
+    return [
+      { role: "system" as const, content: this.getSystemPrompt(context, lang) },
+      ...history.map((m) => ({
+        role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+        content: m.content
+      })),
+      { role: "user" as const, content: message }
+    ];
+  }
+
   // NVIDIA NIM Integration
   private async callNvidiaNim(
     message: string,
@@ -345,15 +408,7 @@ export class PoultryBotController {
     const model = this.config.get<string>("NVIDIA_NIM_MODEL", "meta/llama-3.1-70b-instruct");
     const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
 
-    const systemPrompt = this.getSystemPrompt(context, lang);
-    const messages = [
-      { role: "system", content: systemPrompt },
-      ...history.map((m) => ({
-        role: m.role === "user" ? ("user" as const) : ("assistant" as const),
-        content: m.content
-      })),
-      { role: "user" as const, content: message }
-    ];
+    const messages = this.buildChatMessages(message, history, context, lang);
 
     const response = await fetch(url, {
       method: "POST",
@@ -429,15 +484,7 @@ export class PoultryBotController {
   ): Promise<string> {
     const url = "https://api.openai.com/v1/chat/completions";
 
-    const systemPrompt = this.getSystemPrompt(context, lang);
-    const messages = [
-      { role: "system", content: systemPrompt },
-      ...history.map((m) => ({
-        role: m.role === "user" ? ("user" as const) : ("assistant" as const),
-        content: m.content
-      })),
-      { role: "user" as const, content: message }
-    ];
+    const messages = this.buildChatMessages(message, history, context, lang);
 
     const response = await fetch(url, {
       method: "POST",
