@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -18,6 +19,9 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AuthUser } from "./domain.service";
 import { schemaNames } from "../database/schema-names";
 import { OptionalJwtGuard } from "../common/guards/optional-jwt.guard";
+import { MediaService } from "../media/media.service";
+
+const POST_ROLES = ["farmer", "shopkeeper", "customer", "admin", "super_admin"];
 
 const ALLOWED_TAGS = [
   "broiler", "layer", "chick", "egg", "local-chicken",
@@ -47,6 +51,11 @@ export class PlatformController {
     @InjectModel(schemaNames.Comment) private readonly CommentModel: Model<any>,
     @InjectModel(schemaNames.PostFollow) private readonly FollowModel: Model<any>,
     @InjectModel(schemaNames.User) private readonly UserModel: Model<any>,
+    @InjectModel(schemaNames.Notification) private readonly NotificationModel: Model<any>,
+    @InjectModel(schemaNames.Product) private readonly ProductModel: Model<any>,
+    @InjectModel(schemaNames.Farm) private readonly FarmModel: Model<any>,
+    @InjectModel(schemaNames.Shop) private readonly ShopModel: Model<any>,
+    private readonly media: MediaService,
   ) {}
 
   // ─── Feed ────────────────────────────────────────────────────────────────────
@@ -141,6 +150,10 @@ export class PlatformController {
       content: string;
       tags?: string[];
       mediaUrls?: string[];
+      /** Ids returned by POST /media/upload. */
+      mediaIds?: string[];
+      /** The role to post as (e.g. "farmer"); must be one the user holds. */
+      asRole?: string;
       productId?: string;
       farmId?: string;
       shopId?: string;
@@ -154,7 +167,40 @@ export class PlatformController {
       throw new ForbiddenException("Post content cannot exceed 2000 characters.");
     }
 
-    const authorRole = (user.roles ?? ["customer"])[0];
+    const roles = user.roles ?? [];
+    const isAdmin = roles.some((r) => ["admin", "super_admin"].includes(r));
+    const isSeller = isAdmin || roles.includes("farmer") || roles.includes("shopkeeper");
+    // Show the role that matters for selling, not whichever role happens to be first.
+    const authorRole =
+      body.asRole && roles.includes(body.asRole) && POST_ROLES.includes(body.asRole)
+        ? body.asRole
+        : ["farmer", "shopkeeper", "admin", "super_admin", "customer"].find((r) => roles.includes(r)) ?? "customer";
+
+    const wantsMedia = (body.mediaIds?.length ?? 0) > 0 || (body.mediaUrls?.length ?? 0) > 0;
+    if (wantsMedia && !isSeller) {
+      throw new ForbiddenException("Only farmers and shopkeepers can add photos and videos.");
+    }
+    const uploaded = await this.media.resolveOwned(user, body.mediaIds);
+    const linked = sanitizeMediaUrls(body.mediaUrls).map((url) => ({ url, kind: "image" as const }));
+    const media = [...uploaded, ...linked].slice(0, 4);
+
+    // Only your own listings can be promoted in your posts.
+    const owns = async (model: Model<any>, id?: string) => {
+      if (!id) return undefined;
+      if (!Types.ObjectId.isValid(id)) throw new BadRequestException("Invalid link.");
+      const doc = await model.findById(id).select("ownerId").lean();
+      if (!doc) throw new NotFoundException("Linked item not found.");
+      if (!isAdmin && String((doc as any).ownerId) !== String(user.id)) {
+        throw new ForbiddenException("You can only link your own products, farms or shops.");
+      }
+      return id;
+    };
+    const [productId, farmId, shopId] = await Promise.all([
+      owns(this.ProductModel, body.productId),
+      owns(this.FarmModel, body.farmId),
+      owns(this.ShopModel, body.shopId),
+    ]);
+
     const sanitizedTags = Array.from(new Set(body.tags ?? []))
       .filter((t) => typeof t === "string" && ALLOWED_TAGS.includes(t))
       .slice(0, 5);
@@ -164,10 +210,11 @@ export class PlatformController {
       authorRole,
       content: body.content.trim(),
       tags: sanitizedTags,
-      mediaUrls: sanitizeMediaUrls(body.mediaUrls),
-      productId: body.productId && Types.ObjectId.isValid(body.productId) ? body.productId : undefined,
-      farmId: body.farmId && Types.ObjectId.isValid(body.farmId) ? body.farmId : undefined,
-      shopId: body.shopId && Types.ObjectId.isValid(body.shopId) ? body.shopId : undefined,
+      media,
+      mediaUrls: media.filter((m) => m.kind === "image").map((m) => m.url),
+      productId,
+      farmId,
+      shopId,
       locationLabel: body.locationLabel?.trim()?.slice(0, 120),
     });
 
@@ -194,6 +241,7 @@ export class PlatformController {
 
     await this.PostModel.findByIdAndDelete(id);
     await this.CommentModel.deleteMany({ postId: new Types.ObjectId(id) });
+    await this.media.deleteAssets((post.media ?? []).map((m: any) => m.assetId).filter(Boolean));
     return { message: "Post deleted." };
   }
 
@@ -214,6 +262,7 @@ export class PlatformController {
       post.likes.push(uid);
     }
     await post.save();
+    if (!alreadyLiked) await this.notifyAuthor(post, user, "like");
     return { liked: !alreadyLiked, likeCount: post.likes.length };
   }
 
@@ -271,6 +320,7 @@ export class PlatformController {
 
     const comment = await this.CommentModel.create(commentData);
     await this.PostModel.findByIdAndUpdate(id, { $inc: { commentCount: 1 } });
+    await this.notifyAuthor(post, user, "comment", body.content.trim());
     return comment.populate("authorId", "fullName avatar roles city");
   }
 
@@ -384,4 +434,47 @@ export class PlatformController {
       })),
     };
   }
+
+  /** Tells a post's author that someone liked or commented on it (never for their own actions). */
+  private async notifyAuthor(post: any, actor: AuthUser, action: "like" | "comment", text?: string) {
+    if (String(post.authorId) === String(actor.id)) return;
+    try {
+      const data = { postId: String(post._id), actorId: String(actor.id), link: "/platform" };
+      // One like notification per person and post, even if they unlike and like again.
+      if (action === "like") {
+        const exists = await this.NotificationModel.exists({
+          userId: post.authorId,
+          type: "post_like",
+          "data.postId": data.postId,
+          "data.actorId": data.actorId,
+        });
+        if (exists) return;
+      }
+      const actorDoc = await this.UserModel.findById(actor.id).select("fullName").lean();
+      const name = (actorDoc as any)?.fullName ?? "Someone";
+      const excerpt = String(post.content ?? "").slice(0, 60);
+      const snippet = text ? text.slice(0, 120) : "";
+      const i18n =
+        action === "like"
+          ? {
+              en: { title: `${name} liked your post`, body: `“${excerpt}”` },
+              fr: { title: `${name} a aimé votre publication`, body: `« ${excerpt} »` },
+            }
+          : {
+              en: { title: `${name} commented on your post`, body: snippet },
+              fr: { title: `${name} a commenté votre publication`, body: snippet },
+            };
+      await this.NotificationModel.create({
+        userId: post.authorId,
+        type: action === "like" ? "post_like" : "post_comment",
+        title: i18n.en.title,
+        body: i18n.en.body,
+        data: { ...data, i18n },
+      });
+    } catch (err) {
+      // Engagement must never fail because a notification could not be saved.
+      console.warn("Could not create post notification:", err);
+    }
+  }
+
 }

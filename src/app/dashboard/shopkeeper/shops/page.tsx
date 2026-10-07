@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Shop, Product, Category } from "@/lib/types";
@@ -242,6 +243,11 @@ export default function ShopkeeperShopsPage() {
                           <p style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}>
                             {lang === "en" ? "Stock:" : "Stock :"} <strong>{p.quantity} {p.unit}</strong> | {lang === "en" ? "Price:" : "Prix :"} <strong>{(p.price ?? 0).toLocaleString()} XAF</strong>
                           </p>
+                          {p.approvalStatus === "approved" && (
+                            <Link href={`/platform?product=${p._id}`} className="promote-link" style={{ marginTop: 8 }}>
+                              📣 {lang === "en" ? "Promote with photos/video" : "Promouvoir (photos/vidéo)"}
+                            </Link>
+                          )}
                         </div>
                         <span className={`status-badge ${p.approvalStatus}`}>
                           {p.approvalStatus === "approved" ? (lang === "en" ? "approved" : "approuvé") : p.approvalStatus === "pending" ? (lang === "en" ? "pending" : "en attente") : p.approvalStatus === "rejected" ? (lang === "en" ? "rejected" : "rejeté") : p.approvalStatus}

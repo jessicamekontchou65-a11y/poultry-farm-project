@@ -1,9 +1,26 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { apiFetch } from "@/lib/api";
-import { BarChart3, HelpCircle, Image, Megaphone, Send, Tag, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { apiFetch, api, uploadMedia, type UploadedMedia } from "@/lib/api";
+import { BarChart3, HelpCircle, ImagePlus, Megaphone, Package, Send, Tag, Video, X } from "lucide-react";
+import { useLanguage } from "../../LanguageContext";
 import type { PlatformPost } from "../page";
+
+const MAX_FILES = 4;
+const MAX_IMAGE_MB = 8;
+const MAX_VIDEO_MB = 50;
+const ACCEPT = "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm";
+
+type Attachment = {
+  id: string;
+  file: File;
+  preview: string;
+  kind: "image" | "video";
+  progress: number;
+  status: "uploading" | "done" | "error";
+  uploaded?: UploadedMedia;
+  error?: string;
+};
 
 const ALL_TAGS = [
   "broiler", "layer", "chick", "egg", "local-chicken",
@@ -42,47 +59,90 @@ type Props = {
   token: string;
   user: any;
   onPostCreated: (post: PlatformPost) => void;
+  /** Pre-selects one of the seller's products (e.g. from "Promote" on the products page). */
+  initialProductId?: string;
 };
 
-export default function ComposePost({ token, user, onPostCreated }: Props) {
-  const lang = typeof window !== "undefined" && document.documentElement.lang === "fr" ? "fr" : "en";
+type MyProduct = { _id: string; name: string; price?: number; unit?: string };
+
+export default function ComposePost({ token, user, onPostCreated, initialProductId }: Props) {
+  const { lang } = useLanguage();
+  const en = lang === "en";
+  const roles: string[] = user?.roles ?? [];
+  const isSeller = roles.some((r) => ["farmer", "shopkeeper", "admin", "super_admin"].includes(r));
 
   const [content, setContent] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [mediaUrls, setMediaUrls] = useState<string[]>([]);
-  const [mediaInput, setMediaInput] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [products, setProducts] = useState<MyProduct[]>([]);
+  const [productId, setProductId] = useState(initialProductId ?? "");
   const [showTagPicker, setShowTagPicker] = useState(false);
-  const [showMediaInput, setShowMediaInput] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const previewsRef = useRef<string[]>([]);
 
   const MAX_CHARS = 2000;
   const charLeft = MAX_CHARS - content.length;
-  const canSubmit = content.trim().length > 0 && charLeft >= 0 && !submitting;
+  const uploading = attachments.some((a) => a.status === "uploading");
+  const canSubmit = content.trim().length > 0 && charLeft >= 0 && !submitting && !uploading;
+
+  useEffect(() => {
+    if (!isSeller || !token) return;
+    api
+      .list<MyProduct>("/products/my", { limit: 100 }, token)
+      .then((res) => setProducts(res.data))
+      .catch(() => {});
+  }, [isSeller, token]);
+
+  useEffect(() => {
+    if (initialProductId) setProductId(initialProductId);
+  }, [initialProductId]);
+
+  // Free the local previews when the composer goes away.
+  useEffect(() => () => previewsRef.current.forEach((url) => URL.revokeObjectURL(url)), []);
+
+  const updateAttachment = (id: string, patch: Partial<Attachment>) =>
+    setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+
+  const addFiles = (files: FileList | null) => {
+    if (!files?.length) return;
+    setError("");
+    const room = MAX_FILES - attachments.length;
+    if (room <= 0) {
+      setError(en ? `Up to ${MAX_FILES} photos or videos per post.` : `${MAX_FILES} photos ou vidéos maximum par publication.`);
+      return;
+    }
+    const picked = Array.from(files).slice(0, room);
+    for (const file of picked) {
+      const kind: Attachment["kind"] = file.type.startsWith("video/") ? "video" : "image";
+      const limitMb = kind === "video" ? MAX_VIDEO_MB : MAX_IMAGE_MB;
+      if (file.size > limitMb * 1024 * 1024) {
+        setError(
+          en
+            ? `“${file.name}” is too large (max ${limitMb} MB for ${kind === "video" ? "videos" : "photos"}).`
+            : `« ${file.name} » est trop lourd (max ${limitMb} Mo pour les ${kind === "video" ? "vidéos" : "photos"}).`
+        );
+        continue;
+      }
+      const preview = URL.createObjectURL(file);
+      previewsRef.current.push(preview);
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setAttachments((prev) => [...prev, { id, file, preview, kind, progress: 0, status: "uploading" }]);
+      uploadMedia(file, token, (progress) => updateAttachment(id, { progress }))
+        .then((uploaded) => updateAttachment(id, { status: "done", progress: 100, uploaded, kind: uploaded.kind }))
+        .catch((err) => updateAttachment(id, { status: "error", error: err instanceof Error ? err.message : "Upload failed" }));
+    }
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id));
 
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) =>
       prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag].slice(0, 5)
     );
-  };
-
-  const addMedia = () => {
-    const url = mediaInput.trim();
-    if (!url || mediaUrls.length >= 4) return;
-
-    try {
-      const parsed = new URL(url);
-      if (!["http:", "https:"].includes(parsed.protocol)) {
-        setError(lang === "en" ? "Only http or https image URLs are supported." : "Seules les URLs http ou https sont acceptées.");
-        return;
-      }
-      setMediaUrls((prev) => [...prev, parsed.toString()].slice(0, 4));
-      setMediaInput("");
-      setError("");
-    } catch {
-      setError(lang === "en" ? "Enter a valid image URL." : "Entrez une URL d'image valide.");
-    }
   };
 
   const applyStarter = (starter: (typeof STARTERS)[number]) => {
@@ -102,14 +162,19 @@ export default function ComposePost({ token, user, onPostCreated }: Props) {
       const post = await apiFetch<PlatformPost>("/platform/posts", {
         method: "POST",
         token,
-        body: JSON.stringify({ content, tags: selectedTags, mediaUrls }),
+        body: JSON.stringify({
+          content,
+          tags: selectedTags,
+          mediaIds: attachments.filter((a) => a.status === "done").map((a) => a.uploaded!._id),
+          ...(productId ? { productId } : {})
+        }),
       });
       onPostCreated(post);
       setContent("");
       setSelectedTags([]);
-      setMediaUrls([]);
+      setAttachments([]);
+      setProductId("");
       setShowTagPicker(false);
-      setShowMediaInput(false);
     } catch (e: any) {
       setError(e?.message ?? (lang === "en" ? "Failed to post." : "Échec de la publication."));
     } finally {
@@ -156,16 +221,33 @@ export default function ComposePost({ token, user, onPostCreated }: Props) {
         })}
       </div>
 
-      {/* Media previews */}
-      {mediaUrls.length > 0 && (
-        <div className="compose-media-preview">
-          {mediaUrls.map((url, i) => (
-            <div key={i} className="compose-media-item">
-              <img src={url} alt={`Preview ${i + 1}`} />
+      {/* Photo and video attachments */}
+      {attachments.length > 0 && (
+        <div className="compose-attachments">
+          {attachments.map((a) => (
+            <div key={a.id} className={`compose-attachment compose-attachment--${a.status}`}>
+              {a.kind === "video" ? (
+                <video src={a.preview} muted playsInline preload="metadata" />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={a.preview} alt="" />
+              )}
+              {a.kind === "video" && (
+                <span className="compose-attachment__badge">
+                  <Video size={12} />
+                </span>
+              )}
+              {a.status === "uploading" && (
+                <span className="compose-attachment__progress" aria-label={`${a.progress}%`}>
+                  <span style={{ width: `${a.progress}%` }} />
+                </span>
+              )}
+              {a.status === "error" && <span className="compose-attachment__error">{a.error}</span>}
               <button
+                type="button"
                 className="compose-media-remove"
-                onClick={() => setMediaUrls((prev) => prev.filter((_, idx) => idx !== i))}
-                aria-label="Remove image"
+                onClick={() => removeAttachment(a.id)}
+                aria-label={en ? "Remove" : "Retirer"}
               >
                 <X size={12} />
               </button>
@@ -174,21 +256,20 @@ export default function ComposePost({ token, user, onPostCreated }: Props) {
         </div>
       )}
 
-      {/* Media URL input */}
-      {showMediaInput && (
-        <div className="compose-media-input-row">
-          <input
-            type="url"
-            className="compose-input"
-            placeholder={lang === "en" ? "Paste image URL..." : "Coller l'URL de l'image..."}
-            value={mediaInput}
-            onChange={(e) => setMediaInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addMedia()}
-          />
-          <button className="compose-add-media-btn" onClick={addMedia} disabled={!mediaInput.trim()}>
-            {lang === "en" ? "Add" : "Ajouter"}
-          </button>
-        </div>
+      {/* Link one of the seller's products so buyers can order from the post */}
+      {isSeller && products.length > 0 && (
+        <label className="compose-product">
+          <Package size={16} />
+          <select value={productId} onChange={(e) => setProductId(e.target.value)} aria-label={en ? "Linked product" : "Produit lié"}>
+            <option value="">{en ? "Link a product to sell (optional)" : "Lier un produit à vendre (facultatif)"}</option>
+            {products.map((p) => (
+              <option key={p._id} value={p._id}>
+                {p.name}
+                {p.price !== undefined ? ` — ${p.price.toLocaleString()} FCFA` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
 
       {/* Tag picker */}
@@ -221,13 +302,32 @@ export default function ComposePost({ token, user, onPostCreated }: Props) {
       {/* Footer row */}
       <div className="compose-footer">
         <div className="compose-toolbar">
-          <button
-            className={`compose-tool-btn ${showMediaInput ? "active" : ""}`}
-            onClick={() => setShowMediaInput((v) => !v)}
-            title={lang === "en" ? "Add image URL" : "Ajouter URL image"}
-          >
-            <Image size={17} />
-          </button>
+          {isSeller ? (
+            <>
+              <input
+                ref={fileRef}
+                type="file"
+                accept={ACCEPT}
+                multiple
+                hidden
+                onChange={(e) => addFiles(e.target.files)}
+              />
+              <button
+                type="button"
+                className="compose-tool-btn compose-tool-btn--media"
+                onClick={() => fileRef.current?.click()}
+                disabled={attachments.length >= MAX_FILES}
+                title={en ? "Add photos or videos" : "Ajouter des photos ou vidéos"}
+              >
+                <ImagePlus size={17} />
+                <span>{en ? "Photo / Video" : "Photo / Vidéo"}</span>
+              </button>
+            </>
+          ) : (
+            <span className="compose-hint">
+              {en ? "Photos and videos are for farmers and shops." : "Photos et vidéos : réservées aux éleveurs et boutiques."}
+            </span>
+          )}
           <button
             className={`compose-tool-btn ${showTagPicker ? "active" : ""}`}
             onClick={() => setShowTagPicker((v) => !v)}

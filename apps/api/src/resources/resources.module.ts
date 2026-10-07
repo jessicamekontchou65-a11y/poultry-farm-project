@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
 import { MongooseModule } from "@nestjs/mongoose";
 import { KnowledgeModule } from "../knowledge/knowledge.module";
+import { MediaModule } from "../media/media.module";
 import { schemaDefinitions } from "../database/schemas";
 import { AdminController } from "./admin.controller";
 import { MarketplaceController } from "./marketplace.controller";
@@ -17,7 +18,7 @@ import { MapController } from "./map.controller";
 import { CampayService } from "../payments/campay.service";
 
 @Module({
-  imports: [JwtModule.register({}), MongooseModule.forFeature(schemaDefinitions), KnowledgeModule],
+  imports: [JwtModule.register({}), MongooseModule.forFeature(schemaDefinitions), KnowledgeModule, MediaModule],
   controllers: [
     ResourcesController, 
     SrsController, 

@@ -34,6 +34,8 @@ export type PlatformPost = {
   content: string;
   tags: string[];
   mediaUrls: string[];
+  media?: { url: string; kind: "image" | "video"; mimeType?: string }[];
+  productId?: { _id: string; name: string; price?: number; unit?: string; images?: string[] } | null;
   likes: string[];
   commentCount: number;
   isPinned: boolean;
@@ -67,6 +69,11 @@ export default function PlatformPage() {
   const { lang } = useLanguage();
 
   const [posts, setPosts] = useState<PlatformPost[]>([]);
+  // ?product=<id> comes from the "Promote" button on a seller's products page.
+  const [promoteProductId, setPromoteProductId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    setPromoteProductId(new URLSearchParams(window.location.search).get("product") ?? undefined);
+  }, []);
   const [trendingTags, setTrendingTags] = useState<{ tag: string; count: number }[]>([]);
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [activeTag, setActiveTag] = useState<string>("");
@@ -317,6 +324,7 @@ export default function PlatformPage() {
               token={token!}
               user={user}
               onPostCreated={handlePostCreated}
+              initialProductId={promoteProductId}
             />
           ) : (
             <div className="platform-guest-prompt">

@@ -890,6 +890,9 @@ export class MediaAsset {
   @Prop({ required: true })
   mimeType: string;
 
+  @Prop({ enum: ["image", "video"] })
+  kind?: string;
+
   @Prop({ required: true, min: 0 })
   sizeBytes: number;
 
@@ -968,8 +971,24 @@ export class Post {
   @Prop({ required: true, trim: true, maxlength: 2000 })
   content: string;
 
+  /** Image URLs, kept for older clients; mirrors `media`. */
   @Prop({ type: [String], default: [] })
   mediaUrls: string[];
+
+  /** Uploaded photos and videos, in display order. */
+  @Prop({
+    type: [
+      {
+        _id: false,
+        url: { type: String, required: true },
+        kind: { type: String, enum: ["image", "video"], required: true },
+        mimeType: String,
+        assetId: { type: MongooseSchema.Types.ObjectId, ref: schemaNames.MediaAsset }
+      }
+    ],
+    default: []
+  })
+  media: { url: string; kind: "image" | "video"; mimeType?: string; assetId?: Types.ObjectId }[];
 
   @Prop({ type: [String], default: [], index: true })
   tags: string[];

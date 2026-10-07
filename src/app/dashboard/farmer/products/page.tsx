@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Product, Category } from "@/lib/types";
 import { useAuth } from "../../../AuthContext";
 import { useLanguage } from "../../../LanguageContext";
 import DashboardShell from "../../../components/DashboardShell";
-import { ArrowRight, ClipboardList, PackageCheck, Plus, ShoppingBag } from "lucide-react";
+import { ArrowRight, ClipboardList, Megaphone, PackageCheck, Plus, ShoppingBag } from "lucide-react";
 
 export default function FarmerProductsPage() {
   const { token } = useAuth();
@@ -134,6 +135,12 @@ export default function FarmerProductsPage() {
                     </span>
                     {product.rejectionReason && (
                       <span style={{ color: "#ef4444", fontSize: "0.75rem" }}>Reason: {product.rejectionReason}</span>
+                    )}
+                    {product.approvalStatus === "approved" && (
+                      <Link href={`/platform?product=${product._id}`} className="promote-link">
+                        <Megaphone size={15} />
+                        {lang === "en" ? "Promote with photos/video" : "Promouvoir (photos/vidéo)"}
+                      </Link>
                     )}
                   </div>
                 </article>

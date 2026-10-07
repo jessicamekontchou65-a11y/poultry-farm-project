@@ -102,3 +102,39 @@ export const api = {
     return apiFetch<ApiSingle<T>>(path, { token, method: "DELETE" });
   }
 };
+
+export type UploadedMedia = { _id: string; url: string; kind: "image" | "video"; mimeType: string; sizeBytes: number };
+
+/**
+ * Uploads one photo or video for a post. Uses XMLHttpRequest (not fetch) so the
+ * caller can show upload progress, which matters for videos on mobile data.
+ */
+export function uploadMedia(file: File, token: string, onProgress?: (percent: number) => void) {
+  return new Promise<UploadedMedia>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const form = new FormData();
+    form.append("file", file);
+    xhr.open("POST", `${API_URL}/media/upload`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    xhr.onload = () => {
+      let body: any = {};
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        // Non-JSON error page.
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && body?.data) {
+        resolve(body.data as UploadedMedia);
+      } else {
+        const message = Array.isArray(body?.message) ? body.message.join(", ") : body?.message;
+        reject(new ApiError(xhr.status, message || (xhr.status === 413 ? "File too large" : "Upload failed")));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, "Network error during upload"));
+    xhr.send(form);
+  });
+}
+

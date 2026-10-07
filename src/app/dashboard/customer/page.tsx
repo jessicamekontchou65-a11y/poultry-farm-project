@@ -169,6 +169,7 @@ export default function CustomerMediaHome() {
               key={post._id}
               post={post}
               currentUserId={userId}
+              currentUser={user}
               token={token}
             />
           ))}

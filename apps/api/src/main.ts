@@ -1,12 +1,13 @@
 import "reflect-metadata";
 import compression from "compression";
-import { json, urlencoded, type Request } from "express";
+import express, { json, urlencoded, type Request } from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
+import { mediaDirectory } from "./media/media.service";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -45,10 +46,32 @@ async function bootstrap() {
     },
     credentials: true
   });
+  // Uploaded photos and videos. Registered before helmet so the cross-origin header below
+  // (needed for the web app on another origin) is not overridden. express.static handles
+  // video range requests.
+  app.use(
+    "/api/media/files",
+    express.static(mediaDirectory(config), {
+      fallthrough: false,
+      index: false,
+      dotfiles: "deny",
+      maxAge: "30d",
+      immutable: true,
+      setHeaders: (res) => {
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Content-Security-Policy", "default-src 'none'; media-src 'self'; img-src 'self'");
+      }
+    })
+  );
   app.use(helmet());
   app.use(
     ["/api/auth/login", "/api/auth/register"],
     rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false })
+  );
+  app.use(
+    "/api/media/upload",
+    rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false })
   );
   // Each assistant message can cost AI credits: cap it per client.
   app.use(

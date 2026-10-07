@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Heart, MessageCircle, Trash2, Share2, ChevronDown, ChevronUp } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import PostMedia, { postMediaItems } from "../../components/PostMedia";
 import type { PlatformPost } from "../page";
 import { getRoleBadgeLabel } from "../platform-utils";
 import CommentThread from "./CommentThread";
@@ -146,12 +148,25 @@ export default function PostCard({ post, currentUser, token, onDeleted }: Props)
       </div>
 
       {/* Media */}
-      {post.mediaUrls.length > 0 && (
-        <div className={`platform-post-media media-${post.mediaUrls.length}`}>
-          {post.mediaUrls.slice(0, 4).map((url, i) => (
-            <img key={i} src={url} alt={`Post image ${i + 1}`} />
-          ))}
-        </div>
+      <PostMedia items={postMediaItems(post)} alt={post.authorId.fullName} />
+
+      {/* Promoted product */}
+      {post.productId && (
+        <Link href={`/products/${post.productId._id}`} className="post-product-link">
+          {post.productId.images?.[0] && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={post.productId.images[0]} alt="" />
+          )}
+          <span>
+            <strong>{post.productId.name}</strong>
+            {post.productId.price !== undefined && (
+              <small>
+                {post.productId.price.toLocaleString()} FCFA{post.productId.unit ? ` / ${post.productId.unit}` : ""}
+              </small>
+            )}
+          </span>
+          <em>{lang === "en" ? "Buy" : "Acheter"}</em>
+        </Link>
       )}
 
       {/* Tags */}

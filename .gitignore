@@ -60,3 +60,6 @@ __MACOSX/
 *.swp
 *.swo
 *~
+
+# Uploaded media (local storage)
+uploads/

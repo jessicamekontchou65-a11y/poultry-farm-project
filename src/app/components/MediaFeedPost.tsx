@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   BadgeCheck,
   Bookmark,
@@ -16,6 +16,8 @@ import {
   Truck,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import CommentThread from "../platform/components/CommentThread";
+import PostMedia, { type PostMediaItem, postMediaItems } from "./PostMedia";
 import { useLanguage } from "../LanguageContext";
 
 export type MediaPost = {
@@ -32,6 +34,7 @@ export type MediaPost = {
   content: string;
   tags: string[];
   mediaUrls: string[];
+  media?: PostMediaItem[];
   likes: string[];
   saves?: string[];
   commentCount: number;
@@ -90,13 +93,17 @@ type Props = {
   post: MediaPost;
   currentUserId?: string;
   token?: string | null;
+  /** Needed to post comments; comments are read-only without it. */
+  currentUser?: unknown;
 };
 
-export default function MediaFeedPost({ post, currentUserId, token }: Props) {
+export default function MediaFeedPost({ post, currentUserId, token, currentUser }: Props) {
   const { lang } = useLanguage();
   const [likes, setLikes] = useState((post.likes ?? []).map(String));
   const [saves, setSaves] = useState((post.saves ?? []).map(String));
   const [busy, setBusy] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [commentCount, setCommentCount] = useState(post.commentCount || 0);
 
   const liked = Boolean(currentUserId && likes.includes(currentUserId));
   const saved = Boolean(currentUserId && saves.includes(currentUserId));
@@ -105,13 +112,8 @@ export default function MediaFeedPost({ post, currentUserId, token }: Props) {
     ? [seller.city, seller.region].filter(Boolean).join(", ")
     : post.locationLabel || post.authorId.city || "";
 
-  const distanceHint = useMemo(() => {
-    // Placeholder distance cue until GPS map layer is fully wired
-    const seed = post._id.charCodeAt(post._id.length - 1) % 9;
-    return `${(1.2 + seed * 0.7).toFixed(1)} km`;
-  }, [post._id]);
-
-  const media = post.mediaUrls?.[0]
+  const mediaItems = postMediaItems(post);
+  const fallbackImage = post.mediaUrls?.[0]
     || post.productId?.images?.[0]
     || (post.farmId ? "/images/seed/modern-poultry-farm.png" : "/images/seed/eggs-poultry-products.png");
 
@@ -179,25 +181,35 @@ export default function MediaFeedPost({ post, currentUserId, token }: Props) {
               )}
             </strong>
             <span>
-              <MapPin size={12} /> {place || (lang === "en" ? "Nearby" : "À proximité")} · {distanceHint}
+              <MapPin size={12} /> {place || (lang === "en" ? "Nearby" : "À proximité")}
             </span>
           </div>
         </Link>
         <span className="media-post-card__time">{timeAgo(post.createdAt, lang)}</span>
       </header>
 
-      <div className="media-post-card__media">
-        <img src={media} alt="" />
-      </div>
+      {mediaItems.length > 0 ? (
+        <PostMedia items={mediaItems} alt={post.authorId.fullName} />
+      ) : (
+        <div className="media-post-card__media">
+          <img src={fallbackImage} alt="" />
+        </div>
+      )}
 
       <div className="media-post-card__actions">
         <button type="button" onClick={toggleLike} className={liked ? "is-on" : ""} aria-label="Like">
           <Heart size={20} fill={liked ? "currentColor" : "none"} />
           <span>{likes.length}</span>
         </button>
-        <button type="button" aria-label="Comments">
+        <button
+          type="button"
+          aria-label={lang === "en" ? "Comments" : "Commentaires"}
+          aria-expanded={showComments}
+          className={showComments ? "is-on" : ""}
+          onClick={() => setShowComments((v) => !v)}
+        >
           <MessageCircle size={20} />
-          <span>{post.commentCount || 0}</span>
+          <span>{commentCount}</span>
         </button>
         <button type="button" onClick={share} aria-label="Share">
           <Share2 size={20} />
@@ -208,6 +220,17 @@ export default function MediaFeedPost({ post, currentUserId, token }: Props) {
       </div>
 
       <p className="media-post-card__caption">{post.content}</p>
+
+      {showComments && (
+        <div className="media-post-card__comments">
+          <CommentThread
+            postId={post._id}
+            currentUser={currentUser}
+            token={token}
+            onCommentAdded={() => setCommentCount((count) => count + 1)}
+          />
+        </div>
+      )}
 
       {post.productId && (
         <div className="media-product-card">
