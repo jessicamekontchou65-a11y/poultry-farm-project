@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { InjectConnection } from "@nestjs/mongoose";
 import { Connection } from "mongoose";
+import { getJwtSecret } from "../common/jwt-secrets";
 import { schemaNames } from "../database/schema-names";
 
 interface ChatMessage {
@@ -139,7 +140,7 @@ export class PoultryBotController {
 
     try {
       return await this.jwtService.verifyAsync<VerifiedPayload>(token, {
-        secret: this.config.get<string>("JWT_ACCESS_SECRET", "change_me_access_secret")
+        secret: getJwtSecret(this.config, "JWT_ACCESS_SECRET")
       });
     } catch {
       throw new UnauthorizedException("Your session has expired. Please log in again.");

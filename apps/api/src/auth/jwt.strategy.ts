@@ -6,6 +6,7 @@ import { ExtractJwt, Strategy } from "passport-jwt";
 import { Model } from "mongoose";
 import { schemaNames } from "../database/schema-names";
 import { User } from "../database/schemas";
+import { getJwtSecret } from "../common/jwt-secrets";
 
 export interface JwtPayload {
   sub: string;
@@ -22,7 +23,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, "jwt") {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: config.get<string>("JWT_ACCESS_SECRET", "change_me_access_secret")
+      secretOrKey: getJwtSecret(config, "JWT_ACCESS_SECRET")
     });
   }
 

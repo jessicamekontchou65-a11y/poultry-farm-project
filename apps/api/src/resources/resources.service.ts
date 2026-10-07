@@ -19,6 +19,13 @@ export interface ListQuery {
   [key: string]: string | undefined;
 }
 
+// Fields that must never leave the API, whoever asks.
+const HIDDEN_FIELDS: Record<string, string> = {
+  users: "-passwordHash"
+};
+
+const SAFE_FIELD_NAME = /^[A-Za-z][A-Za-z0-9_.]*$/;
+
 @Injectable()
 export class ResourcesService {
   constructor(@InjectConnection() private readonly connection: Connection) {}
@@ -33,7 +40,7 @@ export class ResourcesService {
     const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
     const skip = (page - 1) * limit;
     const filter = this.buildFilter(query);
-    const sortField = query.sort ?? "createdAt";
+    const sortField = query.sort && SAFE_FIELD_NAME.test(query.sort) ? query.sort : "createdAt";
     const sortOrder = query.order === "asc" ? 1 : -1;
 
     if (query.search && resource === "products") {
@@ -46,6 +53,7 @@ export class ResourcesService {
         .sort({ [sortField]: sortOrder })
         .skip(skip)
         .limit(limit)
+        .select(HIDDEN_FIELDS[resource] ?? {})
         .lean(),
       model.countDocuments(filter)
     ]);
@@ -64,7 +72,7 @@ export class ResourcesService {
   async findOne(resource: string, id: string) {
     const model = this.getModel(resource);
     this.assertObjectId(id);
-    const data = await model.findById(id).lean();
+    const data = await model.findById(id).select(HIDDEN_FIELDS[resource] ?? {}).lean();
 
     if (!data) {
       throw new NotFoundException(`${resource} record not found`);
@@ -75,7 +83,9 @@ export class ResourcesService {
 
   async create(resource: string, payload: Record<string, unknown>) {
     const model = this.getModel(resource);
-    const data = await model.create(payload);
+    const created = await model.create(payload);
+    const data = created.toObject();
+    if (resource === "users") delete data.passwordHash;
     return { data };
   }
 
@@ -84,6 +94,7 @@ export class ResourcesService {
     this.assertObjectId(id);
     const data = await model
       .findByIdAndUpdate(id, payload, { new: true, runValidators: true })
+      .select(HIDDEN_FIELDS[resource] ?? {})
       .lean();
 
     if (!data) {
@@ -208,7 +219,8 @@ export class ResourcesService {
     const excluded = new Set(["page", "limit", "sort", "order", "search", "fromDate", "toDate"]);
 
     for (const [key, value] of Object.entries(query)) {
-      if (!value || excluded.has(key)) {
+      // Only plain string equality filters on ordinary field names: no operators.
+      if (!value || typeof value !== "string" || excluded.has(key) || !SAFE_FIELD_NAME.test(key)) {
         continue;
       }
 

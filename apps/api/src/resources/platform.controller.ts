@@ -2,10 +2,8 @@ import {
   Body,
   Controller,
   Delete,
-  ExecutionContext,
   ForbiddenException,
   Get,
-  Injectable,
   NotFoundException,
   Param,
   Post,
@@ -19,18 +17,7 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AuthUser } from "./domain.service";
 import { schemaNames } from "../database/schema-names";
-import { AuthGuard } from "@nestjs/passport";
-
-
-@Injectable()
-class OptionalJwtGuard extends AuthGuard("jwt") {
-  canActivate(context: ExecutionContext) {
-    return super.canActivate(context);
-  }
-  handleRequest(_err: any, user: any) {
-    return user ?? null; // never throw — just return null for guests
-  }
-}
+import { OptionalJwtGuard } from "../common/guards/optional-jwt.guard";
 
 const ALLOWED_TAGS = [
   "broiler", "layer", "chick", "egg", "local-chicken",

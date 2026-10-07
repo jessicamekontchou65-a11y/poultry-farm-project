@@ -1,15 +1,21 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   BadRequestException,
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
   Query,
+  Req,
+  ServiceUnavailableException,
   UseGuards
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
@@ -18,11 +24,23 @@ import { schemaNames } from "../database/schema-names";
 import { AuthUser, DomainService } from "./domain.service";
 import { ListQuery, ResourcesService } from "./resources.service";
 
+// Fields only admins (moderation) or the server may set on owned listings.
+const OWNER_BLOCKED_FIELDS = [
+  "_id",
+  "ownerId",
+  "verificationStatus",
+  "approvalStatus",
+  "rejectionReason",
+  "createdAt",
+  "updatedAt"
+];
+
 @Controller()
 export class SrsController {
   constructor(
     private readonly resources: ResourcesService,
-    private readonly domain: DomainService
+    private readonly domain: DomainService,
+    private readonly config: ConfigService
   ) {}
 
   @UseGuards(JwtAuthGuard)
@@ -119,13 +137,19 @@ export class SrsController {
 
   @UseGuards(JwtAuthGuard)
   @Patch("shops/:id")
-  updateShop(@Param("id") id: string, @Body() body: Record<string, unknown>) {
-    return this.resources.update("shops", id, body);
+  async updateShop(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>
+  ) {
+    await this.domain.assertShopAccess(user, id);
+    return this.resources.update("shops", id, omit(body, OWNER_BLOCKED_FIELDS));
   }
 
   @UseGuards(JwtAuthGuard)
   @Delete("shops/:id")
-  deleteShop(@Param("id") id: string) {
+  async deleteShop(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    await this.domain.assertShopAccess(user, id);
     return this.resources.remove("shops", id);
   }
 
@@ -133,7 +157,7 @@ export class SrsController {
   @Post("products")
   createProduct(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
     return this.resources.create("products", {
-      ...body,
+      ...omit(body, OWNER_BLOCKED_FIELDS),
       ownerId: user.id
     });
   }
@@ -159,13 +183,19 @@ export class SrsController {
 
   @UseGuards(JwtAuthGuard)
   @Patch("products/:id")
-  updateProduct(@Param("id") id: string, @Body() body: Record<string, unknown>) {
-    return this.resources.update("products", id, body);
+  async updateProduct(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>
+  ) {
+    await this.domain.assertProductAccess(user, id);
+    return this.resources.update("products", id, omit(body, OWNER_BLOCKED_FIELDS));
   }
 
   @UseGuards(JwtAuthGuard)
   @Delete("products/:id")
-  deleteProduct(@Param("id") id: string) {
+  async deleteProduct(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    await this.domain.assertProductAccess(user, id);
     return this.resources.remove("products", id);
   }
 
@@ -200,14 +230,18 @@ export class SrsController {
 
   @UseGuards(JwtAuthGuard)
   @Get("orders/:id")
-  order(@Param("id") id: string) {
-    return this.resources.findOne("orders", id);
+  async order(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return { data: await this.domain.getOrderForUser(user, id) };
   }
 
   @UseGuards(JwtAuthGuard)
   @Patch("orders/:id/status")
-  updateOrderStatus(@Param("id") id: string, @Body() body: Record<string, unknown>) {
-    return this.resources.update("orders", id, body);
+  updateOrderStatus(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>
+  ) {
+    return this.domain.updateOrderStatus(user, id, body.orderStatus);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -217,13 +251,23 @@ export class SrsController {
   }
 
   @Post("payments/callback")
-  paymentCallback(@Body() body: Record<string, unknown>) {
+  paymentCallback(
+    @Req() request: { rawBody?: Buffer },
+    @Headers("x-payment-signature") signature: string | undefined,
+    @Body() body: Record<string, unknown>
+  ) {
+    this.verifyPaymentSignature(request.rawBody, signature);
     return this.domain.markPaymentCallback(body);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get("payments/order/:orderId")
-  orderPayments(@Param("orderId") orderId: string, @Query() query: ListQuery) {
+  async orderPayments(
+    @CurrentUser() user: AuthUser,
+    @Param("orderId") orderId: string,
+    @Query() query: ListQuery
+  ) {
+    await this.domain.getOrderForUser(user, orderId);
     return this.resources.list("payments", {
       ...query,
       orderId
@@ -465,4 +509,26 @@ export class SrsController {
   adminReport() {
     return this.resources.platformOverview();
   }
+
+  /** Payment providers must sign the raw callback body with HMAC-SHA256(PAYMENT_SECRET), hex encoded. */
+  private verifyPaymentSignature(rawBody: Buffer | undefined, signature: string | undefined) {
+    const secret = this.config.get<string>("PAYMENT_SECRET")?.trim();
+    if (!secret) {
+      throw new ServiceUnavailableException("Payment callbacks are not configured");
+    }
+    if (!rawBody || !signature) {
+      throw new ForbiddenException("Missing payment signature");
+    }
+    const expected = createHmac("sha256", secret).update(rawBody).digest();
+    const received = Buffer.from(signature.trim(), "hex");
+    if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+      throw new ForbiddenException("Invalid payment signature");
+    }
+  }
+}
+
+function omit(source: Record<string, unknown>, fields: string[]) {
+  const result = { ...source };
+  for (const field of fields) delete result[field];
+  return result;
 }

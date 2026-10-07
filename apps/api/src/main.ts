@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import compression from "compression";
-import { json, urlencoded } from "express";
+import { json, urlencoded, type Request } from "express";
+import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -9,7 +10,15 @@ import { AppModule } from "./app.module";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
-  app.use(json({ limit: "4mb" }));
+  app.use(
+    json({
+      limit: "4mb",
+      // Keep the exact bytes so payment callbacks can be signature-checked.
+      verify: (req, _res, buf) => {
+        (req as Request & { rawBody?: Buffer }).rawBody = buf;
+      }
+    })
+  );
   app.use(urlencoded({ extended: true, limit: "4mb" }));
 
   const config = app.get(ConfigService);
@@ -37,6 +46,10 @@ async function bootstrap() {
     credentials: true
   });
   app.use(helmet());
+  app.use(
+    ["/api/auth/login", "/api/auth/register"],
+    rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false })
+  );
   app.use(compression());
   app.useGlobalPipes(
     new ValidationPipe({

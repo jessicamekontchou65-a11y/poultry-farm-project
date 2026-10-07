@@ -18,6 +18,17 @@ export type AuthUser = {
   roles: string[];
 };
 
+const ORDER_STATUSES = new Set([
+  "pending",
+  "confirmed",
+  "processing",
+  "ready",
+  "delivered",
+  "cancelled",
+  "rejected"
+]);
+const PAYMENT_STATUSES = new Set(["pending", "paid", "failed", "refunded"]);
+
 const CAMEROON_REGION_COORDINATES: Record<string, { latitude: number; longitude: number }> = {
   adamawa: { latitude: 7.32, longitude: 13.58 },
   centre: { latitude: 3.87, longitude: 11.52 },
@@ -976,7 +987,36 @@ export class DomainService {
     return { data: payment };
   }
 
+  async getOrderForUser(user: AuthUser, orderId: string) {
+    const order = await this.findById(schemaNames.Order, orderId);
+    const isParty = String(order.customerId) === user.id || String(order.sellerId) === user.id;
+    if (!isParty && !this.isAdmin(user)) {
+      throw new ForbiddenException("You cannot access this order");
+    }
+    return order;
+  }
+
+  async updateOrderStatus(user: AuthUser, orderId: string, nextStatus: unknown) {
+    if (typeof nextStatus !== "string" || !ORDER_STATUSES.has(nextStatus)) {
+      throw new BadRequestException("Invalid order status");
+    }
+    const order = await this.getOrderForUser(user, orderId);
+    const isSeller = String(order.sellerId) === user.id;
+    if (!isSeller && !this.isAdmin(user)) {
+      // Customers may only cancel an order the seller has not started on.
+      if (nextStatus !== "cancelled" || order.orderStatus !== "pending") {
+        throw new ForbiddenException("Only the seller can update this order");
+      }
+    }
+    order.orderStatus = nextStatus;
+    await order.save();
+    return { data: order };
+  }
+
   async markPaymentCallback(body: Record<string, any>) {
+    if (!PAYMENT_STATUSES.has(body.status)) {
+      throw new BadRequestException("Invalid payment status");
+    }
     const payment = await this.findById(schemaNames.Payment, String(body.paymentId));
     payment.status = body.status;
     payment.transactionReference = body.transactionReference ?? payment.transactionReference;
@@ -1197,7 +1237,7 @@ export class DomainService {
     return farm;
   }
 
-  private async assertShopAccess(user: AuthUser, shopId: string) {
+  async assertShopAccess(user: AuthUser, shopId: string) {
     const shop = await this.findById(schemaNames.Shop, shopId);
     if (String(shop.ownerId) !== user.id && !this.isAdmin(user)) {
       throw new ForbiddenException("You cannot manage this shop");
@@ -1205,7 +1245,15 @@ export class DomainService {
     return shop;
   }
 
-  private async assertBatchAccess(
+  async assertProductAccess(user: AuthUser, productId: string) {
+    const product = await this.findById(schemaNames.Product, productId);
+    if (String(product.ownerId) !== user.id && !this.isAdmin(user)) {
+      throw new ForbiddenException("You cannot manage this product");
+    }
+    return product;
+  }
+
+  async assertBatchAccess(
     user: AuthUser,
     batchId: string,
     options?: { allowInactive?: boolean }
@@ -1244,7 +1292,7 @@ export class DomainService {
     return this.connection.model(name);
   }
 
-  private isAdmin(user: AuthUser) {
+  isAdmin(user: AuthUser) {
     return user.roles.includes("admin") || user.roles.includes("super_admin");
   }
 }

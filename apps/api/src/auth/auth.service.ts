@@ -11,6 +11,7 @@ import bcrypt from "bcryptjs";
 import { Model } from "mongoose";
 import { schemaNames } from "../database/schema-names";
 import { User } from "../database/schemas";
+import { getJwtSecret } from "../common/jwt-secrets";
 import { LoginDto, RegisterDto } from "./dto";
 
 const MAX_VERIFICATION_DOC_CHARS = 3_500_000; // ~2.5MB base64
@@ -105,11 +106,11 @@ export class AuthService {
     const refreshExpiresIn = this.config.get<string>("JWT_REFRESH_EXPIRES_IN", "7d");
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
-        secret: this.config.get<string>("JWT_ACCESS_SECRET", "change_me_access_secret"),
+        secret: getJwtSecret(this.config, "JWT_ACCESS_SECRET"),
         expiresIn: accessExpiresIn as never
       }),
       this.jwtService.signAsync(payload, {
-        secret: this.config.get<string>("JWT_REFRESH_SECRET", "change_me_refresh_secret"),
+        secret: getJwtSecret(this.config, "JWT_REFRESH_SECRET"),
         expiresIn: refreshExpiresIn as never
       })
     ]);
