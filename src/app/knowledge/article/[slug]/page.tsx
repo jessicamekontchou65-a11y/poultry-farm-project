@@ -99,10 +99,10 @@ export default function KnowledgeArticlePage() {
 
               {article.checklist.length > 0 && <Checklist id={article.slug} items={article.checklist} lang={lang} />}
 
-              {article.symptoms.length > 0 && (
+              {symptomsForLang(article, lang).length > 0 && (
                 <div className="kc-tags">
                   <span>{lang === "en" ? "Related signs:" : "Signes liés :"}</span>
-                  {article.symptoms.map((symptom) => (
+                  {symptomsForLang(article, lang).map((symptom) => (
                     <Link key={symptom} href={`/knowledge?q=${encodeURIComponent(symptom)}`} className="kc-chip">
                       {symptom}
                     </Link>
@@ -165,4 +165,21 @@ export default function KnowledgeArticlePage() {
       </main>
     </>
   );
+}
+
+const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+// Words that only appear in the French way of describing poultry signs.
+const FRENCH_WORDS = new Set(
+  "de des du la le les ne pas en au aux toux tousse toussent mort subite baisse ponte respiration difficile fientes sanglantes diarrhee plumes ebouriffees oiseaux pales eternue eternuements ecoulement yeux gonfles rales forte mortalite tete enflee paralysie torticolis haletement entassement poussins entasses perte appetit refus aliment litiere humide lesions pattes demangeaisons crete bleue amaigrissement abattement boiterie coquille molle oeufs verte vertes blanche blanches thermique boit".split(" ")
+);
+
+function looksFrench(symptom: string) {
+  if (/[àâçéèêëîïôûùüÿœæ]/i.test(symptom)) return true;
+  return normalize(symptom).split(/[^a-z]+/).some((word) => FRENCH_WORDS.has(word));
+}
+
+/** Symptoms are stored in both languages together (for search); show the reader's language. */
+function symptomsForLang(article: KnowledgeArticle, lang: string) {
+  return article.symptoms.filter((symptom) => (lang === "fr" ? looksFrench(symptom) : !looksFrench(symptom)));
 }
